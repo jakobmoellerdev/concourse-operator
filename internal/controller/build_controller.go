@@ -205,8 +205,10 @@ func (r *BuildReconciler) watchBuildEvents(ctx context.Context, cl concourseapi.
 	}
 
 	stream, err := cl.BuildEvents(strconv.Itoa(buildID))
-	if err != nil {
-		log.Error(err, "open build event stream")
+	if err != nil || stream == nil {
+		if err != nil {
+			log.Error(err, "open build event stream")
+		}
 		enqueue()
 		return
 	}
