@@ -1,8 +1,302 @@
 # concourse-operator
-// TODO(user): Add simple overview of use/purpose
+
+A Kubernetes operator that manages [Concourse CI](https://concourse-ci.org) resources declaratively using Custom Resource Definitions (CRDs). Define your Concourse teams, pipelines, jobs, and workers as Kubernetes objects — the operator reconciles them against your Concourse server continuously.
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+
+`concourse-operator` is built with [kubebuilder v4](https://book.kubebuilder.io) and [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime). It communicates with Concourse via the official [go-concourse](https://github.com/concourse/concourse) client library and supports Concourse v8.2.1+.
+
+**API group:** `concourse.concourse-ci.org/v1alpha1`
+
+**7 CRDs:**
+
+| Resource | Purpose |
+|---|---|
+| `ConcourseInstance` | Connection + auth to a Concourse server |
+| `ConcourseTeam` | Team management with role bindings |
+| `ConcoursePipeline` | Pipeline configuration (inline or ConfigMap-sourced) |
+| `ConcourseJob` | Job pause/unpause and build triggering |
+| `ConcourseBuild` | Build lifecycle tracking and abort control |
+| `ConcourseResource` | Resource version pinning and check intervals |
+| `ConcourseWorker` | Worker lifecycle management (active/land/retire/prune) |
+
+## Architecture
+
+```
+Kubernetes Cluster
+┌──────────────────────────────────────────────────────────────┐
+│  concourse-operator (controller-runtime manager)             │
+│                                                              │
+│  ┌───────────────────┐    thread-safe client cache           │
+│  │  ConcourseInstance│────────────────────────────────┐      │
+│  │  (URL, auth, TLS) │                                │      │
+│  └───────────────────┘                                ▼      │
+│          ↑ instanceRef              ┌──────────────────────┐ │
+│  ┌───────────────────┐              │  go-concourse Client │ │
+│  │  ConcourseTeam    │              │  BasicAuth / Token   │ │
+│  │  (roles, members) │              │  + optional TLS      │ │
+│  └───────────────────┘              └──────────────────────┘ │
+│          ↑ teamRef                          │ HTTP API        │
+│  ┌───────────────────┐                      ▼                 │
+│  │  ConcoursePipeline│           ┌────────────────────────┐  │
+│  │  (YAML config)    │           │   Concourse CI Server  │  │
+│  └───────────────────┘           │   (external)           │  │
+│          ↑ pipelineRef           └────────────────────────┘  │
+│  ┌───────────────────┐  ┌──────────────────┐                 │
+│  │  ConcourseJob     │  │ ConcourseResource│                 │
+│  └───────────────────┘  └──────────────────┘                 │
+│          ↑ jobRef                                             │
+│  ┌───────────────────┐  ┌──────────────────┐                 │
+│  │  ConcourseBuild   │  │ ConcourseWorker  │                 │
+│  └───────────────────┘  └──────────────────┘                 │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Component Details
+
+**ConcourseInstance** is the root resource. It holds the Concourse server URL, authentication credentials, and TLS configuration. The operator builds an authenticated HTTP client and stores it in a thread-safe cache keyed by `namespace/name@resourceVersion`. When credentials change the cache is evicted and a fresh client is built.
+
+**ConcourseTeam** references a `ConcourseInstance` and manages a team in Concourse including role bindings (owner, member, pipeline-operator, viewer). The operator creates the team if it does not exist and reconciles role assignments.
+
+**ConcoursePipeline** references a `ConcourseTeam` and manages a pipeline configuration. The operator SHA256-hashes the pipeline YAML to detect config drift and only applies changes when necessary. Pipelines can be paused or exposed via the spec.
+
+**ConcourseJob** references a `ConcoursePipeline` and controls job state (pause/unpause). Setting `triggerBuild: true` triggers a new build.
+
+**ConcourseBuild** references a `ConcourseJob` (or sets `oneOff: true` for standalone builds). The operator tracks the full build lifecycle: `pending → started → succeeded / failed / errored / aborted`. Setting `abort: true` aborts a running build.
+
+**ConcourseResource** references a `ConcoursePipeline` and manages resource version pinning and check intervals.
+
+**ConcourseWorker** references a `ConcourseInstance` and manages worker lifecycle. Set `desiredState` to `active`, `land`, `retire`, or `prune`.
+
+### Dependency Chain
+
+```
+ConcourseInstance
+    └── ConcourseTeam
+            └── ConcoursePipeline
+                    ├── ConcourseJob
+                    │       └── ConcourseBuild
+                    └── ConcourseResource
+
+ConcourseInstance
+    └── ConcourseWorker
+```
+
+Each controller resolves its dependency chain before calling the Concourse API. If a parent resource is not Ready, the child requeues until it is.
+
+## Usage
+
+### 1. Create a credentials Secret
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: concourse-local-credentials
+  namespace: default
+stringData:
+  password: your-concourse-password
+```
+
+### 2. Connect to Concourse — ConcourseInstance
+
+```yaml
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseInstance
+metadata:
+  name: concourseinstance-sample
+  namespace: default
+spec:
+  url: http://localhost:8080
+  auth:
+    basicAuth:
+      username: test
+      passwordRef:
+        name: concourse-local-credentials
+        key: password
+  interval: 5m
+```
+
+**Token-based auth** (alternative):
+
+```yaml
+spec:
+  url: https://ci.example.com
+  auth:
+    tokenAuth:
+      tokenRef:
+        name: concourse-token-secret
+        key: token
+```
+
+**Custom TLS** (optional):
+
+```yaml
+spec:
+  tls:
+    insecureSkipVerify: false
+    caSecretRef:
+      name: concourse-ca-cert
+      key: ca.crt
+```
+
+Check status after applying:
+
+```sh
+kubectl get concourseinstance concourseinstance-sample \
+  -o jsonpath='{.status.conditions}'
+```
+
+### 3. Create a Team — ConcourseTeam
+
+```yaml
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseTeam
+metadata:
+  name: concourseteam-sample
+  namespace: default
+spec:
+  instanceRef:
+    name: concourseinstance-sample
+  teamName: main
+  roles:
+    - role: owner
+      users:
+        - local:test
+```
+
+### 4. Deploy a Pipeline — ConcoursePipeline
+
+**Inline config:**
+
+```yaml
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcoursePipeline
+metadata:
+  name: concoursepipeline-sample
+  namespace: default
+spec:
+  teamRef:
+    name: concourseteam-sample
+  pipelineName: hello-world
+  paused: false
+  exposed: false
+  config:
+    inline: |
+      jobs:
+        - name: hello
+          plan:
+            - task: say-hello
+              config:
+                platform: linux
+                image_resource:
+                  type: registry-image
+                  source: { repository: alpine }
+                run:
+                  path: echo
+                  args: ["Hello, world!"]
+```
+
+**ConfigMap-sourced config** (for larger pipelines):
+
+```yaml
+spec:
+  teamRef:
+    name: concourseteam-sample
+  pipelineName: my-pipeline
+  config:
+    configMapRef:
+      name: my-pipeline-config
+      key: pipeline.yaml
+```
+
+The operator detects config changes via SHA256 hash — updating the ConfigMap triggers a reconcile.
+
+**Pipeline variables:**
+
+```yaml
+spec:
+  vars:
+    - name: git-branch
+      value: main
+    - name: deploy-key
+      secretRef:
+        name: deploy-secrets
+        key: ssh-private-key
+```
+
+### 5. Manage Jobs — ConcourseJob
+
+```yaml
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseJob
+metadata:
+  name: concoursejob-sample
+  namespace: default
+spec:
+  pipelineRef:
+    name: concoursepipeline-sample
+  jobName: hello
+  paused: false
+  triggerBuild: false   # set true to trigger a build on next reconcile
+```
+
+### 6. Track Builds — ConcourseBuild
+
+```yaml
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseBuild
+metadata:
+  name: concoursebuild-sample
+  namespace: default
+spec:
+  jobRef:
+    name: concoursejob-sample
+  abort: false   # set true to abort a running build
+```
+
+Check build status:
+
+```sh
+kubectl get concoursebuild concoursebuild-sample \
+  -o jsonpath='{.status.concourseStatus}'
+```
+
+### 7. Pin Resource Versions — ConcourseResource
+
+```yaml
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseResource
+metadata:
+  name: concourseresource-sample
+  namespace: default
+spec:
+  pipelineRef:
+    name: concoursepipeline-sample
+  resourceName: my-repo
+  checkInterval: 5m
+```
+
+### 8. Manage Workers — ConcourseWorker
+
+```yaml
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseWorker
+metadata:
+  name: concourseworker-sample
+  namespace: default
+spec:
+  instanceRef:
+    name: concourseinstance-sample
+  workerName: worker-1
+  desiredState: active   # active | land | retire | prune
+```
+
+### Apply all samples at once
+
+```sh
+kubectl apply -k config/samples/
+```
 
 ## Getting Started
 
@@ -11,6 +305,7 @@
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
+- Access to a running Concourse CI instance (v8.2.1+).
 
 ### To Deploy on the cluster
 **Build and push your image to the location specified by `IMG`:**
@@ -21,7 +316,7 @@ make docker-build docker-push IMG=<some-registry>/concourse-operator:tag
 
 **NOTE:** This image ought to be published in the personal registry you specified.
 And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+Make sure you have the proper permission to the registry if the above commands don't work.
 
 **Install the CRDs into the cluster:**
 
@@ -132,4 +427,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
