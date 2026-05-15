@@ -1,3 +1,4 @@
+# Local development only. CI uses native GitHub Actions services (see .github/workflows/test-integration.yml).
 services:
   concourse-db:
     image: postgres

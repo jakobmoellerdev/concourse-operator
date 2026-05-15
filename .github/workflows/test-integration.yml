@@ -12,6 +12,24 @@ jobs:
       contents: read
     name: Run against Concourse CI
     runs-on: ubuntu-latest
+
+    services:
+      concourse-db:
+        image: postgres
+        env:
+          POSTGRES_DB: concourse
+          POSTGRES_PASSWORD: concourse_pass
+          POSTGRES_USER: concourse_user
+          PGDATA: /database
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U concourse_user -d concourse"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -24,7 +42,28 @@ jobs:
           go-version-file: go.mod
 
       - name: Start Concourse CI
-        run: docker compose up -d
+        run: |
+          docker run -d --name concourse \
+            --privileged \
+            --cgroupns=host \
+            --network host \
+            -e CONCOURSE_POSTGRES_HOST=localhost \
+            -e CONCOURSE_POSTGRES_USER=concourse_user \
+            -e CONCOURSE_POSTGRES_PASSWORD=concourse_pass \
+            -e CONCOURSE_POSTGRES_DATABASE=concourse \
+            -e CONCOURSE_EXTERNAL_URL=http://localhost:8080 \
+            -e CONCOURSE_ADD_LOCAL_USER=test:test \
+            -e CONCOURSE_MAIN_TEAM_LOCAL_USER=test \
+            -e CONCOURSE_WORKER_BAGGAGECLAIM_DRIVER=overlay \
+            -e CONCOURSE_CLIENT_SECRET=Y29uY291cnNlLXdlYgo= \
+            -e CONCOURSE_TSA_CLIENT_SECRET=Y29uY291cnNlLXdvcmtlcgo= \
+            -e CONCOURSE_CLUSTER_NAME=tutorial \
+            -e CONCOURSE_WORKER_CONTAINERD_DNS_SERVER=8.8.8.8 \
+            -e CONCOURSE_WORKER_RUNTIME=containerd \
+            -e CONCOURSE_ENABLE_PIPELINE_INSTANCES=true \
+            -e CONCOURSE_ENABLE_ACROSS_STEP=true \
+            -e CONCOURSE_ENABLE_RESOURCE_CAUSALITY=true \
+            concourse/concourse quickstart
 
       - name: Wait for Concourse to be healthy
         run: |
