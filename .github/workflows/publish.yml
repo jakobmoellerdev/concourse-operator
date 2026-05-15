@@ -265,6 +265,10 @@ jobs:
         if: github.event_name == 'pull_request'
         run: docker load -i /tmp/manager-image.tar
 
+      - name: Pull image into Docker daemon (non-PR)
+        if: github.event_name != 'pull_request'
+        run: docker pull "${{ needs.merge.outputs.image-ref }}"
+
       - name: Run E2E tests
         env:
           MANAGER_IMAGE: ${{ github.event_name == 'pull_request' && env.LOCAL_IMAGE || needs.merge.outputs.image-ref }}
