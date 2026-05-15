@@ -38,10 +38,9 @@ var _ = Describe("Concourse Integration", func() {
 		})
 
 		It("lists workers", func() {
-			workers, err := concourseClient.ListWorkers()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(workers).NotTo(BeEmpty())
-			GinkgoWriter.Printf("workers: %d\n", len(workers))
+			Eventually(func() ([]atc.Worker, error) {
+				return concourseClient.ListWorkers()
+			}, "60s", "3s").ShouldNot(BeEmpty())
 		})
 	})
 

@@ -83,7 +83,6 @@ func makeReadyPipeline(ctx context.Context, name, teamName string) *concoursev1a
 	return pipeline
 }
 
-
 var _ = Describe("isTerminal", func() {
 	DescribeTable("build status terminal detection",
 		func(status concoursev1alpha1.BuildStatus, expected bool) {
