@@ -19,15 +19,23 @@ package controller
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/concourse/concourse/atc"
+	atcevent "github.com/concourse/concourse/atc/event"
+	concourseapi "github.com/concourse/concourse/go-concourse/concourse"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlevent "sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	concoursev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
@@ -36,8 +44,10 @@ import (
 // BuildReconciler reconciles a Build object.
 type BuildReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Cache  *concourse.Cache
+	Scheme   *runtime.Scheme
+	Cache    *concourse.Cache
+	watchers sync.Map // build CR namespace/name → struct{} sentinel
+	eventCh  chan ctrlevent.TypedGenericEvent[*concoursev1alpha1.Build]
 }
 
 // +kubebuilder:rbac:groups=concourse-ci.org,resources=builds,verbs=get;list;watch;create;update;patch;delete
@@ -155,6 +165,19 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if isTerminal(build.Status.ConcourseStatus) {
 		return ctrl.Result{}, nil
 	}
+
+	// Start an SSE watcher goroutine so we get enqueued immediately when
+	// Concourse finishes the build, rather than waiting for the poll interval.
+	if build.Status.BuildID != 0 {
+		key := types.NamespacedName{Namespace: build.Namespace, Name: build.Name}
+		if _, loaded := r.watchers.LoadOrStore(key.String(), struct{}{}); !loaded {
+			go func() {
+				defer r.watchers.Delete(key.String())
+				r.watchBuildEvents(context.Background(), cl, build.Status.BuildID, key)
+			}()
+		}
+	}
+
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
@@ -167,10 +190,59 @@ func isTerminal(s concoursev1alpha1.BuildPhase) bool {
 	return false
 }
 
+// watchBuildEvents opens an SSE stream for buildID and sends a GenericEvent
+// to r.eventCh as soon as Concourse emits a terminal status event (or on any
+// stream error/EOF). The caller must ensure this runs at most once per Build CR.
+func (r *BuildReconciler) watchBuildEvents(ctx context.Context, cl concourseapi.Client, buildID int, key types.NamespacedName) {
+	log := logf.FromContext(ctx).WithValues("buildID", buildID, "build", key)
+	enqueue := func() {
+		if r.eventCh == nil {
+			return
+		}
+		r.eventCh <- ctrlevent.TypedGenericEvent[*concoursev1alpha1.Build]{Object: &concoursev1alpha1.Build{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+		}}
+	}
+
+	stream, err := cl.BuildEvents(strconv.Itoa(buildID))
+	if err != nil || stream == nil {
+		if err != nil {
+			log.Error(err, "open build event stream")
+		}
+		enqueue()
+		return
+	}
+	defer func() { _ = stream.Close() }()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		ev, err := stream.NextEvent()
+		if err != nil {
+			if err != io.EOF {
+				log.Error(err, "build event stream error")
+			}
+			enqueue()
+			return
+		}
+
+		if s, ok := ev.(atcevent.Status); ok && isTerminal(concoursev1alpha1.BuildPhase(s.Status)) {
+			enqueue()
+			return
+		}
+	}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *BuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.eventCh = make(chan ctrlevent.TypedGenericEvent[*concoursev1alpha1.Build], 64)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&concoursev1alpha1.Build{}).
+		WatchesRawSource(source.Channel(r.eventCh, &handler.TypedEnqueueRequestForObject[*concoursev1alpha1.Build]{})).
 		Named("build").
 		Complete(r)
 }
