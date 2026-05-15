@@ -1,0 +1,181 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: workers.concourse-ci.org
+spec:
+  group: concourse-ci.org
+  names:
+    kind: Worker
+    listKind: WorkerList
+    plural: workers
+    singular: worker
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.instanceRef.name
+      name: Instance
+      type: string
+    - jsonPath: .spec.workerName
+      name: Worker
+      type: string
+    - jsonPath: .status.actualState
+      name: State
+      type: string
+    - jsonPath: .status.platform
+      name: Platform
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Worker manages a worker in a Concourse instance (land, retire,
+          prune).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WorkerSpec defines the desired state of Worker.
+            properties:
+              desiredState:
+                default: active
+                description: |-
+                  DesiredState sets the lifecycle action to perform on the worker.
+                  - active: no-op (workers self-register)
+                  - land: gracefully drain and land the worker
+                  - retire: retire the worker from the pool
+                  - prune: forcibly remove the worker
+                enum:
+                - active
+                - land
+                - retire
+                - prune
+                type: string
+              instanceRef:
+                description: InstanceRef references the Instance this worker belongs
+                  to.
+                properties:
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
+              workerName:
+                description: WorkerName is the unique name of the worker in Concourse.
+                type: string
+            required:
+            - instanceRef
+            - workerName
+            type: object
+          status:
+            description: WorkerStatus defines the observed state of Worker.
+            properties:
+              activeContainers:
+                description: ActiveContainers is the number of containers running
+                  on the worker.
+                type: integer
+              activeVolumes:
+                description: ActiveVolumes is the number of volumes on the worker.
+                type: integer
+              actualState:
+                description: ActualState is the current state of the worker as reported
+                  by Concourse.
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the last generation that was reconciled.
+                format: int64
+                type: integer
+              platform:
+                description: Platform is the worker platform (e.g. linux, darwin).
+                type: string
+              tags:
+                description: Tags are the worker tags.
+                items:
+                  type: string
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

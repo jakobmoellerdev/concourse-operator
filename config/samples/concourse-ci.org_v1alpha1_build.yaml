@@ -1,0 +1,11 @@
+apiVersion: concourse-ci.org/v1alpha1
+kind: Build
+metadata:
+  labels:
+    app.kubernetes.io/name: concourse-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: build-sample
+spec:
+  jobRef:
+    name: job-sample
+  abort: false

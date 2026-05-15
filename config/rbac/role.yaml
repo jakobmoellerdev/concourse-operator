@@ -14,15 +14,15 @@ rules:
   - list
   - watch
 - apiGroups:
-  - concourse.concourse-ci.org
+  - concourse-ci.org
   resources:
-  - concoursebuilds
-  - concourseinstances
-  - concoursejobs
-  - concoursepipelines
-  - concourseresources
-  - concourseteams
-  - concourseworkers
+  - builds
+  - instances
+  - jobs
+  - pipelines
+  - resources
+  - teams
+  - workers
   verbs:
   - create
   - delete
@@ -32,27 +32,27 @@ rules:
   - update
   - watch
 - apiGroups:
-  - concourse.concourse-ci.org
+  - concourse-ci.org
   resources:
-  - concoursebuilds/finalizers
-  - concourseinstances/finalizers
-  - concoursejobs/finalizers
-  - concoursepipelines/finalizers
-  - concourseresources/finalizers
-  - concourseteams/finalizers
-  - concourseworkers/finalizers
+  - builds/finalizers
+  - instances/finalizers
+  - jobs/finalizers
+  - pipelines/finalizers
+  - resources/finalizers
+  - teams/finalizers
+  - workers/finalizers
   verbs:
   - update
 - apiGroups:
-  - concourse.concourse-ci.org
+  - concourse-ci.org
   resources:
-  - concoursebuilds/status
-  - concourseinstances/status
-  - concoursejobs/status
-  - concoursepipelines/status
-  - concourseresources/status
-  - concourseteams/status
-  - concourseworkers/status
+  - builds/status
+  - instances/status
+  - jobs/status
+  - pipelines/status
+  - resources/status
+  - teams/status
+  - workers/status
   verbs:
   - get
   - patch

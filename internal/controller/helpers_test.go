@@ -28,11 +28,11 @@ import (
 	concoursev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 )
 
-// makeReadyInstance creates a ConcourseInstance with Ready=True status.
-func makeReadyInstance(ctx context.Context, name string) *concoursev1alpha1.ConcourseInstance {
-	inst := &concoursev1alpha1.ConcourseInstance{
+// makeReadyInstance creates a Instance with Ready=True status.
+func makeReadyInstance(ctx context.Context, name string) *concoursev1alpha1.Instance {
+	inst := &concoursev1alpha1.Instance{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       concoursev1alpha1.ConcourseInstanceSpec{URL: "https://ci.example.com"},
+		Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
 	}
 	Expect(k8sClient.Create(ctx, inst)).To(Succeed())
 	inst.Status.Conditions = []metav1.Condition{{
@@ -45,11 +45,11 @@ func makeReadyInstance(ctx context.Context, name string) *concoursev1alpha1.Conc
 	return inst
 }
 
-// makeReadyTeam creates a ConcourseTeam with Ready=True status.
-func makeReadyTeam(ctx context.Context, name, instanceName string) *concoursev1alpha1.ConcourseTeam {
-	team := &concoursev1alpha1.ConcourseTeam{
+// makeReadyTeam creates a Team with Ready=True status.
+func makeReadyTeam(ctx context.Context, name, instanceName string) *concoursev1alpha1.Team {
+	team := &concoursev1alpha1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec: concoursev1alpha1.ConcourseTeamSpec{
+		Spec: concoursev1alpha1.TeamSpec{
 			InstanceRef: concoursev1alpha1.LocalObjectReference{Name: instanceName},
 		},
 	}
@@ -64,11 +64,11 @@ func makeReadyTeam(ctx context.Context, name, instanceName string) *concoursev1a
 	return team
 }
 
-// makeReadyPipeline creates a ConcoursePipeline with Ready=True status.
-func makeReadyPipeline(ctx context.Context, name, teamName string) *concoursev1alpha1.ConcoursePipeline {
-	pipeline := &concoursev1alpha1.ConcoursePipeline{
+// makeReadyPipeline creates a Pipeline with Ready=True status.
+func makeReadyPipeline(ctx context.Context, name, teamName string) *concoursev1alpha1.Pipeline {
+	pipeline := &concoursev1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec: concoursev1alpha1.ConcoursePipelineSpec{
+		Spec: concoursev1alpha1.PipelineSpec{
 			TeamRef: concoursev1alpha1.LocalObjectReference{Name: teamName},
 			Config:  concoursev1alpha1.PipelineConfig{Inline: "jobs: []"},
 		},
@@ -91,29 +91,29 @@ func deleteIfExists(ctx context.Context, obj client.Object) {
 
 var _ = Describe("isTerminal", func() {
 	DescribeTable("build status terminal detection",
-		func(status concoursev1alpha1.BuildStatus, expected bool) {
+		func(status concoursev1alpha1.BuildPhase, expected bool) {
 			Expect(isTerminal(status)).To(Equal(expected))
 		},
-		Entry("empty is not terminal", concoursev1alpha1.BuildStatus(""), false),
-		Entry("pending is not terminal", concoursev1alpha1.BuildStatusPending, false),
-		Entry("started is not terminal", concoursev1alpha1.BuildStatusStarted, false),
-		Entry("succeeded is terminal", concoursev1alpha1.BuildStatusSucceeded, true),
-		Entry("failed is terminal", concoursev1alpha1.BuildStatusFailed, true),
-		Entry("errored is terminal", concoursev1alpha1.BuildStatusErrored, true),
-		Entry("aborted is terminal", concoursev1alpha1.BuildStatusAborted, true),
+		Entry("empty is not terminal", concoursev1alpha1.BuildPhase(""), false),
+		Entry("pending is not terminal", concoursev1alpha1.BuildPhasePending, false),
+		Entry("started is not terminal", concoursev1alpha1.BuildPhaseStarted, false),
+		Entry("succeeded is terminal", concoursev1alpha1.BuildPhaseSucceeded, true),
+		Entry("failed is terminal", concoursev1alpha1.BuildPhaseFailed, true),
+		Entry("errored is terminal", concoursev1alpha1.BuildPhaseErrored, true),
+		Entry("aborted is terminal", concoursev1alpha1.BuildPhaseAborted, true),
 	)
 })
 
 var _ = Describe("shouldCheck", func() {
 	It("returns false when CheckInterval is nil", func() {
-		r := &concoursev1alpha1.ConcourseResource{}
+		r := &concoursev1alpha1.Resource{}
 		Expect(shouldCheck(r)).To(BeFalse())
 	})
 
 	It("returns true when CheckInterval is set and never checked", func() {
 		d := metav1.Duration{Duration: 5 * time.Minute}
-		r := &concoursev1alpha1.ConcourseResource{
-			Spec: concoursev1alpha1.ConcourseResourceSpec{CheckInterval: &d},
+		r := &concoursev1alpha1.Resource{
+			Spec: concoursev1alpha1.ResourceSpec{CheckInterval: &d},
 		}
 		Expect(shouldCheck(r)).To(BeTrue())
 	})
@@ -121,9 +121,9 @@ var _ = Describe("shouldCheck", func() {
 	It("returns false when last checked recently", func() {
 		d := metav1.Duration{Duration: 5 * time.Minute}
 		now := metav1.Now()
-		r := &concoursev1alpha1.ConcourseResource{
-			Spec:   concoursev1alpha1.ConcourseResourceSpec{CheckInterval: &d},
-			Status: concoursev1alpha1.ConcourseResourceStatus{LastChecked: &now},
+		r := &concoursev1alpha1.Resource{
+			Spec:   concoursev1alpha1.ResourceSpec{CheckInterval: &d},
+			Status: concoursev1alpha1.ResourceStatus{LastChecked: &now},
 		}
 		Expect(shouldCheck(r)).To(BeFalse())
 	})
@@ -131,9 +131,9 @@ var _ = Describe("shouldCheck", func() {
 	It("returns true when check interval has elapsed", func() {
 		d := metav1.Duration{Duration: time.Millisecond}
 		past := metav1.NewTime(time.Now().Add(-time.Hour))
-		r := &concoursev1alpha1.ConcourseResource{
-			Spec:   concoursev1alpha1.ConcourseResourceSpec{CheckInterval: &d},
-			Status: concoursev1alpha1.ConcourseResourceStatus{LastChecked: &past},
+		r := &concoursev1alpha1.Resource{
+			Spec:   concoursev1alpha1.ResourceSpec{CheckInterval: &d},
+			Status: concoursev1alpha1.ResourceStatus{LastChecked: &past},
 		}
 		Expect(shouldCheck(r)).To(BeTrue())
 	})
