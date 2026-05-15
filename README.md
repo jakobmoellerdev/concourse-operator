@@ -4,6 +4,10 @@
   <img src="docs/logo.svg" alt="concourse-operator logo" width="220"/>
 </p>
 
+<p align="center">
+  <a href="https://jakobmoellerdev.github.io/concourse-operator/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Documentation"/></a>
+</p>
+
 A Kubernetes operator that manages [Concourse CI](https://concourse-ci.org) resources declaratively using Custom Resource Definitions (CRDs). Define your Concourse teams, pipelines, jobs, and workers as Kubernetes objects — the operator reconciles them against your Concourse server continuously.
 
 ## Description
