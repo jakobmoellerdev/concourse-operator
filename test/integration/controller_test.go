@@ -99,11 +99,15 @@ func seedInstance(ctx context.Context, k8s client.Client, cache *concourse.Cache
 }
 
 // makeReadyTeamCR creates a Team CR with Ready=True, referencing the given instance.
+// It includes an owner role for the local test user so Concourse accepts CreateOrUpdate.
 func makeReadyTeamCR(ctx context.Context, k8s client.Client, name, instanceName string) *concoursev1alpha1.Team {
 	team := &concoursev1alpha1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: concoursev1alpha1.TeamSpec{
 			InstanceRef: concoursev1alpha1.LocalObjectReference{Name: instanceName},
+			Roles: []concoursev1alpha1.TeamRole{
+				{Role: "owner", Users: []string{"local:" + concourseUser}},
+			},
 		},
 	}
 	Expect(k8s.Create(ctx, team)).To(Succeed())
@@ -254,6 +258,9 @@ var _ = Describe("Controller Integration", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: teamName, Namespace: "default"},
 				Spec: concoursev1alpha1.TeamSpec{
 					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: instName},
+					Roles: []concoursev1alpha1.TeamRole{
+						{Role: "owner", Users: []string{"local:" + concourseUser}},
+					},
 				},
 			}
 			Expect(k8s.Create(ctx, teamCR)).To(Succeed())
@@ -304,6 +311,9 @@ var _ = Describe("Controller Integration", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: teamName, Namespace: "default"},
 				Spec: concoursev1alpha1.TeamSpec{
 					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: instName},
+					Roles: []concoursev1alpha1.TeamRole{
+						{Role: "owner", Users: []string{"local:" + concourseUser}},
+					},
 				},
 			}
 			Expect(k8s.Create(ctx, teamCR)).To(Succeed())
