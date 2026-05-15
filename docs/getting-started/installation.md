@@ -102,4 +102,4 @@ make uninstall
 ```
 
 !!! danger "Data loss"
-    Deleting ConcourseInstance resources triggers finalizers that clean up the client cache. All other CRs are purely declarative — deleting them removes the Kubernetes object but does not delete the corresponding resource from Concourse.
+    Deleting Instance resources triggers finalizers that clean up the client cache. All other CRs are purely declarative — deleting them removes the Kubernetes object but does not delete the corresponding resource from Concourse.

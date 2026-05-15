@@ -20,8 +20,8 @@ kubectl create secret generic concourse-credentials \
 ## Step 2: Connect to Concourse
 
 ```yaml title="concourseinstance.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseInstance
+apiVersion: concourse-ci.org/v1alpha1
+kind: Instance
 metadata:
   name: my-concourse
 spec:
@@ -42,8 +42,8 @@ kubectl wait --for=condition=Ready concourseinstance/my-concourse --timeout=60s
 ## Step 3: Create a team
 
 ```yaml title="team.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseTeam
+apiVersion: concourse-ci.org/v1alpha1
+kind: Team
 metadata:
   name: my-team
 spec:
@@ -63,8 +63,8 @@ kubectl apply -f team.yaml
 ## Step 4: Deploy a pipeline
 
 ```yaml title="pipeline.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcoursePipeline
+apiVersion: concourse-ci.org/v1alpha1
+kind: Pipeline
 metadata:
   name: hello-world
 spec:

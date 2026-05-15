@@ -1,18 +1,18 @@
 # CRD Reference
 
-All resources belong to the API group `concourse.concourse-ci.org/v1alpha1`.
+All resources belong to the API group `concourse-ci.org/v1alpha1`.
 
 ## Resources
 
 | Kind | Purpose | Parent ref |
 |------|---------|-----------|
-| [ConcourseInstance](concourseinstance.md) | Connection to a Concourse server | — (root) |
-| [ConcourseTeam](concourseteam.md) | Concourse team + RBAC roles | `instanceRef` |
-| [ConcoursePipeline](concoursepipeline.md) | Pipeline configuration | `teamRef` |
-| [ConcourseJob](concoursejob.md) | Job pause state + build trigger | `pipelineRef` |
-| [ConcourseBuild](concoursebuild.md) | Build tracking and abort | `jobRef` |
-| [ConcourseResource](concourseresource.md) | Resource pin + check interval | `pipelineRef` |
-| [ConcourseWorker](concourseworker.md) | Worker lifecycle management | `instanceRef` |
+| [Instance](instance.md) | Connection to a Concourse server | — (root) |
+| [Team](team.md) | Concourse team + RBAC roles | `instanceRef` |
+| [Pipeline](pipeline.md) | Pipeline configuration | `teamRef` |
+| [Job](job.md) | Job pause state + build trigger | `pipelineRef` |
+| [Build](build.md) | Build tracking and abort | `jobRef` |
+| [Resource](resource.md) | Resource pin + check interval | `pipelineRef` |
+| [Worker](worker.md) | Worker lifecycle management | `instanceRef` |
 
 ## Common field types
 
@@ -54,16 +54,16 @@ status:
 
 ```bash
 # List all operator resources
-kubectl get concourseinstance,concourseteam,concoursepipeline,concoursejob,concoursebuild,concourseresource,concourseworker
+kubectl get instance,team,pipeline,job,build,resource,worker
 
 # Describe a resource (shows events and conditions)
-kubectl describe concoursepipeline my-pipeline
+kubectl describe pipeline my-pipeline
 
 # Watch status
-kubectl get concoursebuild --watch
+kubectl get build --watch
 
 # Short names (set by kubebuilder printcolumns)
-kubectl get ci    # ConcourseInstance
-kubectl get ct    # ConcourseTeam
-kubectl get cp    # ConcoursePipeline
+kubectl get ci    # Instance
+kubectl get ct    # Team
+kubectl get cp    # Pipeline
 ```

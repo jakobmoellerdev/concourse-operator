@@ -22,13 +22,13 @@ Only needed if you are building the operator image yourself.
 
 The operator needs:
 
-- Permission to read `Secrets` in the namespaces where `ConcourseInstance` resources live (for credentials)
+- Permission to read `Secrets` in the namespaces where `Instance` resources live (for credentials)
 - Permission to create `Events` (for status logging)
 - RBAC resources are generated automatically by kustomize — see [Installation](installation.md)
 
 ## Network connectivity
 
-The operator pod must be able to reach the Concourse ATC URL specified in each `ConcourseInstance.spec.url`. If your Concourse is behind a private network or VPN, ensure the operator's namespace has the appropriate egress rules.
+The operator pod must be able to reach the Concourse ATC URL specified in each `Instance.spec.url`. If your Concourse is behind a private network or VPN, ensure the operator's namespace has the appropriate egress rules.
 
 ## Optional: cert-manager
 

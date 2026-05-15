@@ -6,12 +6,12 @@ This tutorial walks through every layer of the operator — from connecting to C
 
 A fully operator-managed Concourse setup:
 
-- A `ConcourseInstance` connected to a local Concourse server
-- A `ConcourseTeam` with owner access
-- A `ConcoursePipeline` running a hello-world job
-- A `ConcourseJob` and `ConcourseBuild` to track the run
-- A `ConcourseResource` with a pinned version
-- A `ConcourseWorker` lifecycle demonstration
+- A `Instance` connected to a local Concourse server
+- A `Team` with owner access
+- A `Pipeline` running a hello-world job
+- A `Job` and `Build` to track the run
+- A `Resource` with a pinned version
+- A `Worker` lifecycle demonstration
 
 ---
 
@@ -44,7 +44,7 @@ Leave this terminal open. Open a second terminal for `kubectl` commands.
 
 ## Part 3: Connect to Concourse
 
-Create the credentials secret and the `ConcourseInstance`:
+Create the credentials secret and the `Instance`:
 
 ```bash
 kubectl create secret generic concourse-local-credentials \
@@ -52,8 +52,8 @@ kubectl create secret generic concourse-local-credentials \
 ```
 
 ```yaml title="01-instance.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseInstance
+apiVersion: concourse-ci.org/v1alpha1
+kind: Instance
 metadata:
   name: tutorial
 spec:
@@ -79,8 +79,8 @@ kubectl get concourseinstance tutorial
 ## Part 4: Create a team
 
 ```yaml title="02-team.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseTeam
+apiVersion: concourse-ci.org/v1alpha1
+kind: Team
 metadata:
   name: tutorial-team
 spec:
@@ -105,8 +105,8 @@ Open the Concourse UI — the `main` team now has the configured owner.
 ## Part 5: Deploy a pipeline
 
 ```yaml title="03-pipeline.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcoursePipeline
+apiVersion: concourse-ci.org/v1alpha1
+kind: Pipeline
 metadata:
   name: tutorial-pipeline
 spec:
@@ -150,11 +150,11 @@ The pipeline appears in the Concourse UI. Because `exposed: true`, it is visible
 
 ## Part 6: Trigger and track a build
 
-Create a `ConcourseJob` referencing the `hello` job, then set `triggerBuild: true`:
+Create a `Job` referencing the `hello` job, then set `triggerBuild: true`:
 
 ```yaml title="04-job.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseJob
+apiVersion: concourse-ci.org/v1alpha1
+kind: Job
 metadata:
   name: tutorial-hello
 spec:
@@ -169,7 +169,7 @@ spec:
 kubectl apply -f 04-job.yaml
 ```
 
-The operator triggers a build and creates a `ConcourseBuild` CR. Watch it:
+The operator triggers a build and creates a `Build` CR. Watch it:
 
 ```bash
 kubectl get concoursebuild --watch
@@ -185,8 +185,8 @@ The `status.apiURL` field contains a direct link to the build log in the Concour
 ## Part 7: Pin a resource version
 
 ```yaml title="05-resource.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseResource
+apiVersion: concourse-ci.org/v1alpha1
+kind: Resource
 metadata:
   name: tutorial-timer
 spec:
@@ -218,8 +218,8 @@ The operator calls Concourse's pin API. Remove the field to unpin.
 ## Part 8: Worker lifecycle
 
 ```yaml title="06-worker.yaml"
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseWorker
+apiVersion: concourse-ci.org/v1alpha1
+kind: Worker
 metadata:
   name: tutorial-worker
 spec:
@@ -249,8 +249,8 @@ kubectl patch concourseworker tutorial-worker \
 
 Commit all six YAML files to your repository. Configure a tool like Flux or Argo CD to apply the directory. From this point:
 
-- Changing `spec.config.inline` in `ConcoursePipeline` → operator detects SHA diff → updates Concourse
-- Rotating the password `Secret` → annotate `ConcourseInstance` → operator evicts cache → reconnects
+- Changing `spec.config.inline` in `Pipeline` → operator detects SHA diff → updates Concourse
+- Rotating the password `Secret` → annotate `Instance` → operator evicts cache → reconnects
 - Setting `triggerBuild: false` → operator stops triggering builds on the next reconcile
 
 ---

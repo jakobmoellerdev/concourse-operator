@@ -80,7 +80,7 @@ make docker-push  IMG=<registry>/concourse-operator:dev
 This project uses [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat: add ConcourseResource pinnedVersion support
+feat: add Resource pinnedVersion support
 fix: evict cache entry on instance finalizer
 docs: add authentication guide
 test: add integration test for team deletion

@@ -1,12 +1,12 @@
-# ConcourseWorker
+# Worker
 
 Manages the lifecycle of a Concourse worker: land, retire, or prune it from the pool.
 
 ## Example
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseWorker
+apiVersion: concourse-ci.org/v1alpha1
+kind: Worker
 metadata:
   name: my-worker
 spec:
@@ -20,7 +20,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `instanceRef` | [LocalObjectReference](index.md#localobjectreference) | yes | — | The `ConcourseInstance` this worker belongs to. |
+| `instanceRef` | [LocalObjectReference](index.md#localobjectreference) | yes | — | The `Instance` this worker belongs to. |
 | `workerName` | string | yes | — | Unique name of the worker as registered in Concourse. |
 | `desiredState` | [WorkerDesiredState](#workerdesiredstate) | no | `active` | Desired lifecycle state. |
 

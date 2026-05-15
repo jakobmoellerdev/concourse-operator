@@ -1,18 +1,18 @@
 # Dependency Chain
 
-Every resource type except `ConcourseInstance` depends on a parent resource being `Ready` before it can reconcile. This mirrors the natural hierarchy of Concourse itself.
+Every resource type except `Instance` depends on a parent resource being `Ready` before it can reconcile. This mirrors the natural hierarchy of Concourse itself.
 
 ## Full chain
 
 ```mermaid
 graph TD
-  I["ConcourseInstance\n(root — holds auth credentials)"]
-  T["ConcourseTeam\nrequires: instanceRef.Ready"]
-  P["ConcoursePipeline\nrequires: teamRef.Ready"]
-  J["ConcourseJob\nrequires: pipelineRef.Ready"]
-  B["ConcourseBuild\nrequires: jobRef.Ready"]
-  R["ConcourseResource\nrequires: pipelineRef.Ready"]
-  W["ConcourseWorker\nrequires: instanceRef.Ready"]
+  I["Instance\n(root — holds auth credentials)"]
+  T["Team\nrequires: instanceRef.Ready"]
+  P["Pipeline\nrequires: teamRef.Ready"]
+  J["Job\nrequires: pipelineRef.Ready"]
+  B["Build\nrequires: jobRef.Ready"]
+  R["Resource\nrequires: pipelineRef.Ready"]
+  W["Worker\nrequires: instanceRef.Ready"]
 
   I --> T
   T --> P

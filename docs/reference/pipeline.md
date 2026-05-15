@@ -1,4 +1,4 @@
-# ConcoursePipeline
+# Pipeline
 
 Manages a Concourse pipeline: uploads configuration, controls pause/expose state, and detects config drift via SHA-256 hashing.
 
@@ -7,8 +7,8 @@ Manages a Concourse pipeline: uploads configuration, controls pause/expose state
 === "Inline config"
 
     ```yaml
-    apiVersion: concourse.concourse-ci.org/v1alpha1
-    kind: ConcoursePipeline
+    apiVersion: concourse-ci.org/v1alpha1
+    kind: Pipeline
     metadata:
       name: hello-world
     spec:
@@ -36,8 +36,8 @@ Manages a Concourse pipeline: uploads configuration, controls pause/expose state
 === "ConfigMap reference"
 
     ```yaml
-    apiVersion: concourse.concourse-ci.org/v1alpha1
-    kind: ConcoursePipeline
+    apiVersion: concourse-ci.org/v1alpha1
+    kind: Pipeline
     metadata:
       name: my-pipeline
     spec:
@@ -107,5 +107,5 @@ Exactly one of `value` or `valueFrom` must be set.
 ## Usage notes
 
 - **Drift detection:** The operator hashes the fully-resolved pipeline YAML (after variable substitution). If `status.configHash` matches the current hash, no `SetPipeline` call is made — only pause/expose state is reconciled.
-- **ConfigMap changes:** The operator does not watch ConfigMaps for changes. To trigger reconciliation after updating a ConfigMap, touch the `ConcoursePipeline` (e.g. update an annotation).
+- **ConfigMap changes:** The operator does not watch ConfigMaps for changes. To trigger reconciliation after updating a ConfigMap, touch the `Pipeline` (e.g. update an annotation).
 - **Variable secrets:** Variables using `valueFrom` are read from Secrets at reconcile time. Rotating the Secret value requires a CR touch to re-trigger reconciliation.

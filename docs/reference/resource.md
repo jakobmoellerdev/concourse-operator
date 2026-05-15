@@ -1,12 +1,12 @@
-# ConcourseResource
+# Resource
 
 Manages a resource within a Concourse pipeline: controls pinned versions and check intervals.
 
 ## Example
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseResource
+apiVersion: concourse-ci.org/v1alpha1
+kind: Resource
 metadata:
   name: my-repo
 spec:

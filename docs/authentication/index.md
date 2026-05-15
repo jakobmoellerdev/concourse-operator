@@ -1,14 +1,14 @@
 # Authentication
 
-The operator authenticates to Concourse on behalf of each `ConcourseInstance`. Two authentication methods are supported; they are mutually exclusive.
+The operator authenticates to Concourse on behalf of each `Instance`. Two authentication methods are supported; they are mutually exclusive.
 
 ## Basic auth
 
 Username and password. The password is read from a Kubernetes `Secret`.
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseInstance
+apiVersion: concourse-ci.org/v1alpha1
+kind: Instance
 metadata:
   name: my-concourse
 spec:
@@ -36,8 +36,8 @@ kubectl create secret generic concourse-credentials \
 A pre-issued bearer token. Useful for service accounts or long-lived tokens.
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseInstance
+apiVersion: concourse-ci.org/v1alpha1
+kind: Instance
 metadata:
   name: my-concourse
 spec:
@@ -103,7 +103,7 @@ spec:
 When you update the `Secret` that holds your password or token, the operator does **not** automatically detect the `Secret` change. To trigger a refresh:
 
 1. Update the `Secret` with the new credential.
-2. Annotate or patch the `ConcourseInstance` to bump its `resourceVersion` (e.g. add/change an annotation).
+2. Annotate or patch the `Instance` to bump its `resourceVersion` (e.g. add/change an annotation).
 
 This evicts the cached client and forces a new client build with the updated credentials.
 

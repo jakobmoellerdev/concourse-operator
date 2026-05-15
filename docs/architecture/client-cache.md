@@ -12,7 +12,7 @@ The client cache stores ready-to-use `concourse.Client` instances and evicts the
 "{namespace}/{name}@{resourceVersion}"
 ```
 
-The `resourceVersion` of the `ConcourseInstance` object is included in the key. When the `ConcourseInstance` spec changes (e.g. a password rotation updates the referenced `Secret`), the operator updates the `ConcourseInstance`, bumping `resourceVersion`. The next reconcile produces a cache miss, triggering a fresh client build with the new credentials.
+The `resourceVersion` of the `Instance` object is included in the key. When the `Instance` spec changes (e.g. a password rotation updates the referenced `Secret`), the operator updates the `Instance`, bumping `resourceVersion`. The next reconcile produces a cache miss, triggering a fresh client build with the new credentials.
 
 ## Thread safety
 
@@ -34,8 +34,8 @@ Source: `internal/concourse/client_cache.go`
 | First reconcile of an Instance | Cache miss → build client → store |
 | Subsequent reconcile, spec unchanged | Cache hit → reuse |
 | Spec change (credential rotation, URL update) | Cache miss (new resourceVersion) → build client → store |
-| `ConcourseInstance` deleted (finalizer runs) | Entry removed from cache |
+| `Instance` deleted (finalizer runs) | Entry removed from cache |
 
 ## Eviction on deletion
 
-`ConcourseInstanceReconciler` adds the finalizer `concourse.concourse-ci.org/instance-finalizer` to every `ConcourseInstance`. When the object is deleted, the finalizer handler removes the client from the cache before allowing the deletion to complete.
+`InstanceReconciler` adds the finalizer `concourse-ci.org/instance-finalizer` to every `Instance`. When the object is deleted, the finalizer handler removes the client from the cache before allowing the deletion to complete.

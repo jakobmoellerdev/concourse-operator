@@ -34,7 +34,7 @@ kubectl apply -k github.com/jakobmoellerdev/concourse-operator/config/crd
 kubectl apply -k github.com/jakobmoellerdev/concourse-operator/config/default
 ```
 
-Then create a `Secret` with your Concourse password and a `ConcourseInstance` pointing at your server. See [Getting Started](getting-started/index.md) for the full walkthrough.
+Then create a `Secret` with your Concourse password and a `Instance` pointing at your server. See [Getting Started](getting-started/index.md) for the full walkthrough.
 
 ## Project status
 

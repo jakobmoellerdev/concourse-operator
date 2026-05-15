@@ -1,12 +1,12 @@
-# ConcourseTeam
+# Team
 
 Manages a Concourse team and its RBAC role bindings. The operator creates the team if it does not exist and reconciles role bindings on every sync.
 
 ## Example
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseTeam
+apiVersion: concourse-ci.org/v1alpha1
+kind: Team
 metadata:
   name: my-team
 spec:
@@ -26,7 +26,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `instanceRef` | [LocalObjectReference](index.md#localobjectreference) | yes | — | The `ConcourseInstance` this team belongs to. |
+| `instanceRef` | [LocalObjectReference](index.md#localobjectreference) | yes | — | The `Instance` this team belongs to. |
 | `teamName` | string | no | `metadata.name` | Name of the team in Concourse. Defaults to the CR name if omitted. |
 | `roles` | [][TeamRole](#teamrole) | no | — | RBAC role bindings for this team. |
 
@@ -50,4 +50,4 @@ spec:
 
 - `teamName` defaults to `metadata.name` if not set. If you rename the CR, set `teamName` explicitly to avoid creating a new team.
 - The `main` team in Concourse has special restrictions — it cannot be deleted. The operator will reconcile its roles but will not attempt to delete it.
-- Removing a `ConcourseTeam` CR does **not** delete the team from Concourse — it only removes the Kubernetes object.
+- Removing a `Team` CR does **not** delete the team from Concourse — it only removes the Kubernetes object.

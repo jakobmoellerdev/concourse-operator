@@ -62,13 +62,13 @@ nav:
       - authentication/index.md
   - CRD Reference:
       - reference/index.md
-      - ConcourseInstance: reference/concourseinstance.md
-      - ConcourseTeam: reference/concourseteam.md
-      - ConcoursePipeline: reference/concoursepipeline.md
-      - ConcourseJob: reference/concoursejob.md
-      - ConcourseBuild: reference/concoursebuild.md
-      - ConcourseResource: reference/concourseresource.md
-      - ConcourseWorker: reference/concourseworker.md
+      - Instance: reference/instance.md
+      - Team: reference/team.md
+      - Pipeline: reference/pipeline.md
+      - Job: reference/job.md
+      - Build: reference/build.md
+      - Resource: reference/resource.md
+      - Worker: reference/worker.md
   - Tutorial:
       - tutorial/index.md
   - Development:

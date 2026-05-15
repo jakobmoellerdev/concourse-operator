@@ -1,12 +1,12 @@
-# ConcourseInstance
+# Instance
 
-Root resource. Represents a connection to a Concourse CI server. All other resources resolve an authenticated client through a `ConcourseInstance`.
+Root resource. Represents a connection to a Concourse CI server. All other resources resolve an authenticated client through a `Instance`.
 
 ## Example
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseInstance
+apiVersion: concourse-ci.org/v1alpha1
+kind: Instance
 metadata:
   name: my-concourse
 spec:
@@ -71,5 +71,5 @@ spec:
 
 - Exactly one of `basicAuth` or `tokenAuth` must be set; both or neither is invalid.
 - The `interval` field controls the minimum reconciliation frequency. The operator also reconciles on any spec change.
-- A finalizer (`concourse.concourse-ci.org/instance-finalizer`) is added to each instance to clean up the client cache on deletion.
+- A finalizer (`concourse-ci.org/instance-finalizer`) is added to each instance to clean up the client cache on deletion.
 - Changing the `url` or credential `Secret` contents requires bumping `resourceVersion` (e.g. by updating an annotation) to evict the cached client.

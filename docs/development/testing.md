@@ -127,7 +127,7 @@ make run       # run the operator process locally
 kubectl apply -f config/samples/
 ```
 
-The samples reference `concourseinstance-sample` which points at `http://localhost:8080` using the `concourse-local-credentials` secret. They are ordered such that applying the full directory works without conflicts (ConcourseInstance → ConcourseTeam → ConcoursePipeline → ConcourseJob / ConcourseResource / ConcourseWorker).
+The samples reference `concourseinstance-sample` which points at `http://localhost:8080` using the `concourse-local-credentials` secret. They are ordered such that applying the full directory works without conflicts (Instance → Team → Pipeline → Job / Resource / Worker).
 
 ---
 

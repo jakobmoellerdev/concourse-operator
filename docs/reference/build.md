@@ -1,4 +1,4 @@
-# ConcourseBuild
+# Build
 
 Tracks and controls a Concourse build. Can be tied to a job or be a standalone one-off build.
 
@@ -7,8 +7,8 @@ Tracks and controls a Concourse build. Can be tied to a job or be a standalone o
 === "Job-triggered build"
 
     ```yaml
-    apiVersion: concourse.concourse-ci.org/v1alpha1
-    kind: ConcourseBuild
+    apiVersion: concourse-ci.org/v1alpha1
+    kind: Build
     metadata:
       name: my-build
     spec:
@@ -20,8 +20,8 @@ Tracks and controls a Concourse build. Can be tied to a job or be a standalone o
 === "One-off build"
 
     ```yaml
-    apiVersion: concourse.concourse-ci.org/v1alpha1
-    kind: ConcourseBuild
+    apiVersion: concourse-ci.org/v1alpha1
+    kind: Build
     metadata:
       name: my-oneoff
     spec:
@@ -79,4 +79,4 @@ stateDiagram-v2
 
 - Exactly one of `jobRef` or `oneOff: true` must be set.
 - `abort: true` only has effect when `concourseStatus` is `started`. The operator sets it to `False` after the abort is confirmed.
-- `ConcourseBuild` CRs are typically created automatically by `ConcourseJob` when `triggerBuild: true` is set, but you can also create them manually.
+- `Build` CRs are typically created automatically by `Job` when `triggerBuild: true` is set, but you can also create them manually.

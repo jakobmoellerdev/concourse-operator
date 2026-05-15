@@ -9,13 +9,13 @@ graph LR
   subgraph Kubernetes
     direction TB
     CM[Controller Manager]
-    CM --> R1[ConcourseInstance\nReconciler]
-    CM --> R2[ConcourseTeam\nReconciler]
-    CM --> R3[ConcoursePipeline\nReconciler]
-    CM --> R4[ConcourseJob\nReconciler]
-    CM --> R5[ConcourseBuild\nReconciler]
-    CM --> R6[ConcourseResource\nReconciler]
-    CM --> R7[ConcourseWorker\nReconciler]
+    CM --> R1[Instance\nReconciler]
+    CM --> R2[Team\nReconciler]
+    CM --> R3[Pipeline\nReconciler]
+    CM --> R4[Job\nReconciler]
+    CM --> R5[Build\nReconciler]
+    CM --> R6[Resource\nReconciler]
+    CM --> R7[Worker\nReconciler]
     CC[Client Cache]
     R1 --> CC
     R2 --> CC
@@ -37,12 +37,12 @@ Each resource type lives within a parent context. Controllers walk the dependenc
 
 ```mermaid
 graph TD
-  I[ConcourseInstance] --> T[ConcourseTeam]
-  T --> P[ConcoursePipeline]
-  P --> J[ConcourseJob]
-  J --> B[ConcourseBuild]
-  P --> R[ConcourseResource]
-  I --> W[ConcourseWorker]
+  I[Instance] --> T[Team]
+  T --> P[Pipeline]
+  P --> J[Job]
+  J --> B[Build]
+  P --> R[Resource]
+  I --> W[Worker]
 ```
 
 Details: [Dependency Chain](dependency-chain.md)
@@ -78,6 +78,6 @@ All seven resource types expose a `conditions` array following the standard `met
 | Condition type | Meaning |
 |----------------|---------|
 | `Ready` | Reconciliation succeeded; resource is in sync with Concourse |
-| `Authenticated` | (ConcourseInstance only) Connection and credentials verified |
+| `Authenticated` | (Instance only) Connection and credentials verified |
 
 Conditions use `observedGeneration` to distinguish stale observations from current ones.
