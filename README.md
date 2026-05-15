@@ -22,34 +22,35 @@ A Kubernetes operator that manages [Concourse CI](https://concourse-ci.org) reso
 
 ## Architecture
 
-```
-Kubernetes Cluster
-┌──────────────────────────────────────────────────────────────┐
-│  concourse-operator (controller-runtime manager)             │
-│                                                              │
-│  ┌───────────────────┐    thread-safe client cache           │
-│  │  Instance│────────────────────────────────┐      │
-│  │  (URL, auth, TLS) │                                │      │
-│  └───────────────────┘                                ▼      │
-│          ↑ instanceRef              ┌──────────────────────┐ │
-│  ┌───────────────────┐              │  go-concourse Client │ │
-│  │  Team    │              │  BasicAuth / Token   │ │
-│  │  (roles, members) │              │  + optional TLS      │ │
-│  └───────────────────┘              └──────────────────────┘ │
-│          ↑ teamRef                          │ HTTP API        │
-│  ┌───────────────────┐                      ▼                 │
-│  │  Pipeline│           ┌────────────────────────┐  │
-│  │  (YAML config)    │           │   Concourse CI Server  │  │
-│  └───────────────────┘           │   (external)           │  │
-│          ↑ pipelineRef           └────────────────────────┘  │
-│  ┌───────────────────┐  ┌──────────────────┐                 │
-│  │  Job     │  │ Resource│                 │
-│  └───────────────────┘  └──────────────────┘                 │
-│          ↑ jobRef                                             │
-│  ┌───────────────────┐  ┌──────────────────┐                 │
-│  │  Build   │  │ Worker  │                 │
-│  └───────────────────┘  └──────────────────┘                 │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph K8s ["Kubernetes Cluster"]
+        direction LR
+        subgraph operator ["concourse-operator (controller-runtime)"]
+            direction TB
+            CI["Instance\n(URL · auth · TLS)"]
+            CT["Team\n(roles · members)"]
+            CP["Pipeline\n(YAML config)"]
+            CJ["Job"]
+            CB["Build"]
+            CR["Resource"]
+            CW["Worker"]
+        end
+        cache[("thread-safe\nclient cache")]
+        goClient["go-concourse Client\nBasicAuth · Token · TLS"]
+    end
+    ciServer(["Concourse CI Server\n(external)"])
+
+    CI -- instanceRef --> CT
+    CT -- teamRef --> CP
+    CP -- pipelineRef --> CJ
+    CJ -- jobRef --> CB
+    CP -- pipelineRef --> CR
+    CI -- instanceRef --> CW
+
+    CI -->|"builds / evicts"| cache
+    cache --> goClient
+    goClient -->|"HTTP API"| ciServer
 ```
 
 ### Component Details
@@ -70,16 +71,22 @@ Kubernetes Cluster
 
 ### Dependency Chain
 
-```
-Instance
-    └── Team
-            └── Pipeline
-                    ├── Job
-                    │       └── Build
-                    └── Resource
+```mermaid
+graph TD
+    CI[Instance]
+    CT[Team]
+    CP[Pipeline]
+    CJ[Job]
+    CB[Build]
+    CR[Resource]
+    CW[Worker]
 
-Instance
-    └── Worker
+    CI --> CT
+    CT --> CP
+    CP --> CJ
+    CJ --> CB
+    CP --> CR
+    CI --> CW
 ```
 
 Each controller resolves its dependency chain before calling the Concourse API. If a parent resource is not Ready, the child requeues until it is.
