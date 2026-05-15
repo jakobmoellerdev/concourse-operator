@@ -139,13 +139,14 @@ func (r *JobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if err := r.Status().Update(ctx, job); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
 	}
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *JobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&concoursev1alpha1.Job{}).
+		Owns(&concoursev1alpha1.Build{}).
 		Named("job").
 		Complete(r)
 }
