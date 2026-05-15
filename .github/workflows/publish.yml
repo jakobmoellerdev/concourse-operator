@@ -18,39 +18,21 @@ env:
   LOCAL_IMAGE: concourse-operator:pr-test
 
 jobs:
-  build:
-    name: Build and Push Image
+  setup:
+    name: Compute Metadata
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
-
     outputs:
-      digest: ${{ steps.build-push.outputs.digest }}
-      image-ref: ${{ steps.image-ref.outputs.value }}
-
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      annotations: ${{ steps.meta.outputs.annotations }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Set up QEMU
-        if: github.event_name != 'pull_request'
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -71,24 +53,80 @@ jobs:
             org.opencontainers.image.source=https://github.com/jakobmoellerdev/concourse-operator
             org.opencontainers.image.licenses=Apache-2.0
 
-      - name: Build and push (publish)
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: [setup]
+    runs-on: ${{ matrix.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-latest
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive a safe artifact name from the platform (e.g. linux/amd64 → linux-amd64)
+      - name: Prepare platform slug
+        id: slug
+        run: echo "value=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push by digest (publish)
         id: build-push
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
+          # Push without a tag; the merge job will create the final manifest list.
+          # Labels/annotations are embedded in the image layers here.
+          labels: ${{ needs.setup.outputs.labels }}
+          annotations: ${{ needs.setup.outputs.annotations }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
+          provenance: false
+          sbom: false
+
+      - name: Export digest (publish)
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build-push.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest artifact (publish)
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ steps.slug.outputs.value }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Build and load (PR)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.platform == 'linux/amd64'
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
@@ -96,55 +134,96 @@ jobs:
           push: false
           load: true
           tags: ${{ env.LOCAL_IMAGE }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ needs.setup.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Install cosign
-        if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v3.8.2
-
-      - name: Sign image with cosign (keyless)
-        if: github.event_name != 'pull_request'
-        env:
-          COSIGN_EXPERIMENTAL: "1"
-        run: |
-          cosign sign --yes \
-            --recursive \
-            "${{ env.IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}"
-
-      - name: Attest with GitHub attestations
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd # v2.3.0
-        with:
-          subject-name: ${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build-push.outputs.digest }}
-          push-to-registry: true
-
-      - name: Set image ref output
-        id: image-ref
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "value=${{ env.LOCAL_IMAGE }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${{ env.IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Export image as tar (PR only)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.platform == 'linux/amd64'
         run: docker save "${{ env.LOCAL_IMAGE }}" -o /tmp/manager-image.tar
 
       - name: Upload image tar (PR only)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.platform == 'linux/amd64'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: manager-image
           path: /tmp/manager-image.tar
           retention-days: 1
 
+  merge:
+    name: Merge Multi-Arch Manifest
+    if: github.event_name != 'pull_request'
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
+    outputs:
+      digest: ${{ steps.merge.outputs.digest }}
+      image-ref: ${{ steps.image-ref.outputs.value }}
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest list
+        id: merge
+        working-directory: /tmp/digests
+        run: |
+          # Build the list of per-arch image references
+          images=$(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          # Render all tags as -t flags
+          tags=$(echo '${{ needs.setup.outputs.tags }}' | awk '{print "-t "$0}' ORS=' ')
+          docker buildx imagetools create $tags $images
+          # Retrieve the digest of the merged manifest
+          first_tag=$(echo '${{ needs.setup.outputs.tags }}' | head -n1)
+          digest=$(docker buildx imagetools inspect "$first_tag" --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Set image ref output
+        id: image-ref
+        run: echo "value=${{ env.IMAGE_NAME }}@${{ steps.merge.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v3.8.2
+
+      - name: Sign image with cosign (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            --recursive \
+            "${{ env.IMAGE_NAME }}@${{ steps.merge.outputs.digest }}"
+
+      - name: Attest with GitHub attestations
+        uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd # v2.3.0
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.merge.outputs.digest }}
+          push-to-registry: true
+
   test-e2e:
     name: E2E Tests
-    needs: [build]
+    needs: [build, merge]
+    # merge is skipped on PRs; make this job run regardless of merge's skip
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -188,14 +267,14 @@ jobs:
 
       - name: Run E2E tests
         env:
-          MANAGER_IMAGE: ${{ needs.build.outputs.image-ref }}
+          MANAGER_IMAGE: ${{ github.event_name == 'pull_request' && env.LOCAL_IMAGE || needs.merge.outputs.image-ref }}
           CERT_MANAGER_INSTALL_SKIP: "true"
         run: go mod tidy && make test-e2e
 
   provenance:
     name: SLSA Provenance
     if: github.event_name != 'pull_request'
-    needs: [build, test-e2e]
+    needs: [merge, test-e2e]
     permissions:
       actions: read
       id-token: write
@@ -204,7 +283,7 @@ jobs:
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
     with:
       image: ghcr.io/jakobmoellerdev/concourse-operator
-      digest: ${{ needs.build.outputs.digest }}
+      digest: ${{ needs.merge.outputs.digest }}
       registry-username: ${{ github.actor }}
     secrets:
       registry-password: ${{ secrets.GITHUB_TOKEN }}
