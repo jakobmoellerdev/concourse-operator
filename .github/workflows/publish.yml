@@ -1,4 +1,4 @@
-name: Publish Container Image
+name: Build and Publish
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - main
     tags:
       - "v*"
+  pull_request:
   workflow_dispatch:
 
 permissions: {}
@@ -13,6 +14,8 @@ permissions: {}
 env:
   IMAGE_NAME: ghcr.io/jakobmoellerdev/concourse-operator
   REGISTRY: ghcr.io
+  # Used by e2e on PRs where no registry digest is available
+  LOCAL_IMAGE: concourse-operator:pr-test
 
 jobs:
   build:
@@ -26,6 +29,7 @@ jobs:
 
     outputs:
       digest: ${{ steps.build-push.outputs.digest }}
+      image-ref: ${{ steps.image-ref.outputs.value }}
 
     steps:
       - name: Checkout repository
@@ -34,12 +38,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up QEMU
+        if: github.event_name != 'pull_request'
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -65,8 +71,9 @@ jobs:
             org.opencontainers.image.source=https://github.com/jakobmoellerdev/concourse-operator
             org.opencontainers.image.licenses=Apache-2.0
 
-      - name: Build and push
+      - name: Build and push (publish)
         id: build-push
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@263435318d21b8e681c14492fe198f0a3eb6098d # v6.18.0
         with:
           context: .
@@ -80,10 +87,25 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Build and load (PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198f0a3eb6098d # v6.18.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.LOCAL_IMAGE }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Install cosign
+        if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v3.8.2
 
       - name: Sign image with cosign (keyless)
+        if: github.event_name != 'pull_request'
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
@@ -92,11 +114,33 @@ jobs:
             "${{ env.IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}"
 
       - name: Attest with GitHub attestations
+        if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd # v2.3.0
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build-push.outputs.digest }}
           push-to-registry: true
+
+      - name: Set image ref output
+        id: image-ref
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "value=${{ env.LOCAL_IMAGE }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ env.IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Export image as tar (PR only)
+        if: github.event_name == 'pull_request'
+        run: docker save "${{ env.LOCAL_IMAGE }}" -o /tmp/manager-image.tar
+
+      - name: Upload image tar (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: manager-image
+          path: /tmp/manager-image.tar
+          retention-days: 1
 
   test-e2e:
     name: E2E Tests
@@ -124,20 +168,33 @@ jobs:
           sudo mv ./kind /usr/local/bin/kind
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download image tar (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: manager-image
+          path: /tmp
+
+      - name: Load image into Docker daemon (PR only)
+        if: github.event_name == 'pull_request'
+        run: docker load -i /tmp/manager-image.tar
+
       - name: Run E2E tests
         env:
-          MANAGER_IMAGE: ${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+          MANAGER_IMAGE: ${{ needs.build.outputs.image-ref }}
           CERT_MANAGER_INSTALL_SKIP: "true"
         run: go mod tidy && make test-e2e
 
   provenance:
     name: SLSA Provenance
+    if: github.event_name != 'pull_request'
     needs: [build, test-e2e]
     permissions:
       actions: read
