@@ -50,6 +50,10 @@ var _ = BeforeSuite(func() {
 
 	transport := &bearerTransport{base: http.DefaultTransport, token: token}
 	concourseClient = goconcourse.NewClient(concourseURL, &http.Client{Transport: transport}, false)
+
+	info, err := concourseClient.GetInfo()
+	Expect(err).NotTo(HaveOccurred(), "failed to get Concourse server info")
+	GinkgoWriter.Printf("Testing against Concourse %s (cluster: %q) at %s\n", info.Version, info.ClusterName, concourseURL)
 })
 
 // getOAuthToken fetches a bearer token using the local user password grant.
