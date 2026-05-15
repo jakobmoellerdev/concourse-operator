@@ -1,0 +1,72 @@
+/*
+ * Concourse CI color palette for Material for MkDocs.
+ * Primary: navy #323d5c | Accent: orange-yellow #f5a623
+ */
+
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        #323d5c;
+  --md-primary-fg-color--light: #4a5578;
+  --md-primary-fg-color--dark:  #1e2736;
+  --md-primary-bg-color:        #ffffff;
+  --md-primary-bg-color--light: #ffffff;
+  --md-accent-fg-color:              #f5a623;
+  --md-accent-fg-color--transparent: rgba(245, 166, 35, 0.1);
+  --md-accent-bg-color:              #ffffff;
+  --md-accent-bg-color--light:       #ffffff;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        #323d5c;
+  --md-primary-fg-color--light: #4a5578;
+  --md-primary-fg-color--dark:  #1e2736;
+  --md-primary-bg-color:        #e8eaf0;
+  --md-primary-bg-color--light: #f5f5f7;
+  --md-accent-fg-color:              #f5a623;
+  --md-accent-fg-color--transparent: rgba(245, 166, 35, 0.1);
+  --md-default-bg-color:          #1e2736;
+  --md-default-bg-color--light:   #263040;
+  --md-default-bg-color--lighter: #2e3a4e;
+  --md-default-bg-color--lightest:#3a4760;
+}
+
+/* Navigation active / hover */
+.md-nav__link--active,
+.md-nav__link:hover {
+  color: var(--md-accent-fg-color) !important;
+}
+
+/* Header */
+.md-header {
+  background-color: #1e2736;
+}
+
+/* Tab active / hover */
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  color: #f5a623;
+}
+
+/* Footer */
+.md-footer {
+  background-color: #1e2736;
+}
+
+/* Code font size */
+.highlight code {
+  font-size: 0.82rem;
+}
+
+/* Tip admonition — orange accent to match Concourse highlights */
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: #f5a623;
+}
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary {
+  background-color: rgba(245, 166, 35, 0.1);
+}
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .tip > summary::before {
+  background-color: #f5a623;
+}
