@@ -18,7 +18,10 @@ package controller
 
 import (
 	"context"
+	"time"
 
+	"github.com/concourse/concourse/atc"
+	goconcourse "github.com/concourse/concourse/go-concourse/concourse"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -119,6 +122,109 @@ var _ = Describe("Resource Controller", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal("PipelineNotReady"))
+		})
+	})
+
+	Context("When Concourse API responds successfully", func() {
+		ctx := context.Background()
+
+		It("should call CheckResource when interval elapsed and update status.LastChecked", func() {
+			By("Setting up a ready chain with fake client")
+			cache := concourse.NewCache()
+			checkCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "res-team",
+					checkResourceFn: func(_ atc.PipelineRef, _ string, _ atc.Version, _ bool) (atc.Build, bool, error) {
+						checkCalled = true
+						return atc.Build{ID: 1}, true, nil
+					},
+					resourceVersionsFn: func(_ atc.PipelineRef, _ string, _ goconcourse.Page, _ atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error) {
+						return []atc.ResourceVersion{{Version: atc.Version{"ref": "abc123"}}}, goconcourse.Pagination{}, true, nil
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "res-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "res-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "res-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			interval := metav1.Duration{Duration: time.Millisecond}
+			cr := &concoursev1alpha1.Resource{
+				ObjectMeta: metav1.ObjectMeta{Name: "res-check", Namespace: "default"},
+				Spec: concoursev1alpha1.ResourceSpec{
+					PipelineRef:   concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					ResourceName:  "my-git",
+					CheckInterval: &interval,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			reconciler := &ResourceReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "res-check", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(checkCalled).To(BeTrue(), "expected CheckResource to be called")
+
+			By("Verifying status.LastChecked is set and Ready=True")
+			fetched := &concoursev1alpha1.Resource{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.LastChecked).NotTo(BeNil())
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should populate status.LatestVersion from ResourceVersions", func() {
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "res2-team",
+					resourceVersionsFn: func(_ atc.PipelineRef, _ string, _ goconcourse.Page, _ atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error) {
+						return []atc.ResourceVersion{{Version: atc.Version{"ref": "deadbeef"}}}, goconcourse.Pagination{}, true, nil
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "res2-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "res2-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "res2-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			cr := &concoursev1alpha1.Resource{
+				ObjectMeta: metav1.ObjectMeta{Name: "res-version", Namespace: "default"},
+				Spec: concoursev1alpha1.ResourceSpec{
+					PipelineRef:  concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					ResourceName: "my-git",
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			reconciler := &ResourceReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "res-version", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			fetched := &concoursev1alpha1.Resource{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.LatestVersion).To(Equal(map[string]string{"ref": "deadbeef"}))
 		})
 	})
 })

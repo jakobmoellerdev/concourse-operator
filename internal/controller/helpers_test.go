@@ -23,8 +23,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	concoursev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
+	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
 )
 
 // makeReadyInstance creates a Instance with Ready=True status.
@@ -81,6 +83,18 @@ func makeReadyPipeline(ctx context.Context, name, teamName string) *concoursev1a
 	}}
 	Expect(k8sClient.Status().Update(ctx, pipeline)).To(Succeed())
 	return pipeline
+}
+
+// makeReadyInstanceWithFakeClient creates a ready ConcourseInstance and pre-populates
+// the given cache with the provided fakeClient so reconcilers skip HTTP auth.
+// It re-fetches the instance after creation to ensure the ResourceVersion is current.
+func makeReadyInstanceWithFakeClient(ctx context.Context, name string, c *concourse.Cache, cl *fakeClient) *concoursev1alpha1.Instance {
+	makeReadyInstance(ctx, name)
+	// Re-fetch to get the latest ResourceVersion (status update above may have bumped it).
+	latest := &concoursev1alpha1.Instance{}
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: "default"}, latest)).To(Succeed())
+	c.Set(latest, cl)
+	return latest
 }
 
 var _ = Describe("isTerminal", func() {

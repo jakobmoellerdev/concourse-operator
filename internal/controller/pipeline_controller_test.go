@@ -18,7 +18,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/concourse/concourse/atc"
+	goconcourse "github.com/concourse/concourse/go-concourse/concourse"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -240,6 +243,294 @@ var _ = Describe("Pipeline Controller", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal("ConfigLoadFailed"))
+		})
+	})
+
+	Context("When Concourse API responds successfully", func() {
+		ctx := context.Background()
+
+		It("should call CreateOrUpdatePipelineConfig with inline config and set Ready=True", func() {
+			By("Setting up a fake client that records pipeline API calls")
+			cache := concourse.NewCache()
+			var capturedConfig []byte
+			pauseCalled, unpauseCalled, hideCalled := false, false, false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "main",
+					createOrUpdatePipelineConfigFn: func(ref atc.PipelineRef, _ string, cfg []byte, _ bool) (bool, bool, []goconcourse.ConfigWarning, error) {
+						capturedConfig = cfg
+						return true, false, nil, nil
+					},
+					pausePipelineFn:   func(_ atc.PipelineRef) (bool, error) { pauseCalled = true; return true, nil },
+					unpausePipelineFn: func(_ atc.PipelineRef) (bool, error) { unpauseCalled = true; return true, nil },
+					hidePipelineFn:    func(_ atc.PipelineRef) (bool, error) { hideCalled = true; return true, nil },
+					pipelineFn:        func(_ atc.PipelineRef) (atc.Pipeline, bool, error) { return atc.Pipeline{ID: 7}, true, nil },
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "pipe-happy-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+
+			team := makeReadyTeam(ctx, "pipe-happy-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "pipe-happy", Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: team.Name},
+					Config:  concoursev1alpha1.PipelineConfig{Inline: "jobs: []"},
+					Paused:  false,
+					Exposed: false,
+				},
+			}
+			Expect(k8sClient.Create(ctx, pl)).To(Succeed())
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: "pipe-happy", Namespace: "default"}, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			reconciler := &PipelineReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "pipe-happy", Namespace: "default"}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			By("Verifying API was called with the correct config")
+			Expect(capturedConfig).To(Equal([]byte("jobs: []")))
+			Expect(unpauseCalled).To(BeTrue(), "expected UnpausePipeline to be called")
+			Expect(hideCalled).To(BeTrue(), "expected HidePipeline to be called")
+			Expect(pauseCalled).To(BeFalse(), "PausePipeline should not be called when paused=false")
+
+			By("Verifying status fields and Ready=True")
+			fetched := &concoursev1alpha1.Pipeline{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.ConfigHash).NotTo(BeEmpty())
+			Expect(fetched.Status.PipelineID).To(Equal(7))
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should not call CreateOrUpdatePipelineConfig when config hash is unchanged", func() {
+			By("Setting up a fake client")
+			cache := concourse.NewCache()
+			callCount := 0
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "main",
+					createOrUpdatePipelineConfigFn: func(_ atc.PipelineRef, _ string, _ []byte, _ bool) (bool, bool, []goconcourse.ConfigWarning, error) {
+						callCount++
+						return false, false, nil, nil
+					},
+					pipelineFn: func(_ atc.PipelineRef) (atc.Pipeline, bool, error) { return atc.Pipeline{ID: 5}, true, nil },
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "pipe-noupdate-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "pipe-noupdate-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "pipe-noupdate", Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: team.Name},
+					Config:  concoursev1alpha1.PipelineConfig{Inline: "jobs: []"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pl)).To(Succeed())
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: "pipe-noupdate", Namespace: "default"}, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			reconciler := &PipelineReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "pipe-noupdate", Namespace: "default"}
+
+			By("First reconcile creates pipeline")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(callCount).To(Equal(1))
+
+			By("Second reconcile with same config hash skips CreateOrUpdate")
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(callCount).To(Equal(1), "CreateOrUpdatePipelineConfig should not be called again when hash unchanged")
+		})
+
+		It("should call PausePipeline when spec.paused=true", func() {
+			By("Setting up a fake client")
+			cache := concourse.NewCache()
+			pauseCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "main",
+					createOrUpdatePipelineConfigFn: func(_ atc.PipelineRef, _ string, _ []byte, _ bool) (bool, bool, []goconcourse.ConfigWarning, error) {
+						return true, false, nil, nil
+					},
+					pausePipelineFn: func(_ atc.PipelineRef) (bool, error) { pauseCalled = true; return true, nil },
+					pipelineFn:      func(_ atc.PipelineRef) (atc.Pipeline, bool, error) { return atc.Pipeline{ID: 9}, true, nil },
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "pipe-pause-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "pipe-pause-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "pipe-pause", Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: team.Name},
+					Config:  concoursev1alpha1.PipelineConfig{Inline: "jobs: []"},
+					Paused:  true,
+				},
+			}
+			Expect(k8sClient.Create(ctx, pl)).To(Succeed())
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: "pipe-pause", Namespace: "default"}, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			reconciler := &PipelineReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "pipe-pause", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pauseCalled).To(BeTrue(), "expected PausePipeline to be called")
+
+			fetched := &concoursev1alpha1.Pipeline{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.Paused).To(BeTrue())
+		})
+
+		It("should set Ready=False/SetPipelineFailed when CreateOrUpdatePipelineConfig returns error", func() {
+			By("Setting up a fake client that returns an error")
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "main",
+					createOrUpdatePipelineConfigFn: func(_ atc.PipelineRef, _ string, _ []byte, _ bool) (bool, bool, []goconcourse.ConfigWarning, error) {
+						return false, false, nil, fmt.Errorf("concourse api error")
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "pipe-err-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "pipe-err-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "pipe-err", Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: team.Name},
+					Config:  concoursev1alpha1.PipelineConfig{Inline: "jobs: []"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pl)).To(Succeed())
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: "pipe-err", Namespace: "default"}, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			reconciler := &PipelineReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "pipe-err", Namespace: "default"}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			fetched := &concoursev1alpha1.Pipeline{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("SetPipelineFailed"))
+		})
+
+		It("should call DeletePipeline on finalization", func() {
+			By("Setting up a fake client that records DeletePipeline calls")
+			cache := concourse.NewCache()
+			deleteCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "main",
+					createOrUpdatePipelineConfigFn: func(_ atc.PipelineRef, _ string, _ []byte, _ bool) (bool, bool, []goconcourse.ConfigWarning, error) {
+						return true, false, nil, nil
+					},
+					deletePipelineFn: func(_ atc.PipelineRef) (bool, error) { deleteCalled = true; return true, nil },
+					pipelineFn:       func(_ atc.PipelineRef) (atc.Pipeline, bool, error) { return atc.Pipeline{ID: 3}, true, nil },
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "pipe-del-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "pipe-del-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "pipe-del", Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: team.Name},
+					Config:  concoursev1alpha1.PipelineConfig{Inline: "jobs: []"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pl)).To(Succeed())
+
+			reconciler := &PipelineReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "pipe-del", Namespace: "default"}
+
+			By("First reconcile adds finalizer")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Deleting triggers DeletePipeline")
+			fetched := &concoursev1alpha1.Pipeline{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, fetched)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deleteCalled).To(BeTrue(), "expected DeletePipeline to be called during finalization")
 		})
 	})
 })

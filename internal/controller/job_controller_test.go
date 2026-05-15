@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 
+	"github.com/concourse/concourse/atc"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -210,6 +211,179 @@ var _ = Describe("Job Controller", func() {
 					Expect(b.Spec.JobRef.Name).NotTo(Equal("job-without-trigger"))
 				}
 			}
+		})
+	})
+
+	Context("When Concourse API responds successfully", func() {
+		ctx := context.Background()
+
+		It("should NOT trigger a second build when ObservedGeneration already matches Generation", func() {
+			By("Setting up a ready chain with fake client")
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name:         "jt-team",
+					unpauseJobFn: func(_ atc.PipelineRef, _ string) (bool, error) { return true, nil },
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "jt-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "jt-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "jt-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			triggerJob := &concoursev1alpha1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "job-idempotent", Namespace: "default"},
+				Spec: concoursev1alpha1.JobSpec{
+					PipelineRef:  concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					JobName:      "deploy",
+					TriggerBuild: true,
+				},
+			}
+			Expect(k8sClient.Create(ctx, triggerJob)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, triggerJob)
+				buildList := &concoursev1alpha1.BuildList{}
+				_ = k8sClient.List(ctx, buildList)
+				for i := range buildList.Items {
+					_ = k8sClient.Delete(ctx, &buildList.Items[i])
+				}
+			})
+
+			reconciler := &JobReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "job-idempotent", Namespace: "default"}
+
+			By("First reconcile creates a build (Generation=1, ObservedGeneration=0)")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			buildListAfterFirst := &concoursev1alpha1.BuildList{}
+			Expect(k8sClient.List(ctx, buildListAfterFirst)).To(Succeed())
+			countAfterFirst := 0
+			for _, b := range buildListAfterFirst.Items {
+				if b.Spec.JobRef != nil && b.Spec.JobRef.Name == "job-idempotent" {
+					countAfterFirst++
+				}
+			}
+			Expect(countAfterFirst).To(Equal(1), "expected exactly 1 build after first reconcile")
+
+			By("Second reconcile with same generation should NOT create another build")
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			buildListAfterSecond := &concoursev1alpha1.BuildList{}
+			Expect(k8sClient.List(ctx, buildListAfterSecond)).To(Succeed())
+			countAfterSecond := 0
+			for _, b := range buildListAfterSecond.Items {
+				if b.Spec.JobRef != nil && b.Spec.JobRef.Name == "job-idempotent" {
+					countAfterSecond++
+				}
+			}
+			Expect(countAfterSecond).To(Equal(1), "second reconcile should not create a duplicate build")
+		})
+
+		It("should call PauseJob when spec.paused=true and set status.Paused=true", func() {
+			cache := concourse.NewCache()
+			pauseCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "jp-team",
+					pauseJobFn: func(_ atc.PipelineRef, _ string) (bool, error) {
+						pauseCalled = true
+						return true, nil
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "jp-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "jp-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "jp-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			pausedJob := &concoursev1alpha1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "job-paused", Namespace: "default"},
+				Spec: concoursev1alpha1.JobSpec{
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					JobName:     "deploy",
+					Paused:      true,
+				},
+			}
+			Expect(k8sClient.Create(ctx, pausedJob)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pausedJob) })
+
+			reconciler := &JobReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "job-paused", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pauseCalled).To(BeTrue(), "expected PauseJob to be called")
+
+			fetched := &concoursev1alpha1.Job{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.Paused).To(BeTrue())
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should call UnpauseJob when spec.paused=false and set status.Paused=false", func() {
+			cache := concourse.NewCache()
+			unpauseCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "jup-team",
+					unpauseJobFn: func(_ atc.PipelineRef, _ string) (bool, error) {
+						unpauseCalled = true
+						return true, nil
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "jup-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "jup-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "jup-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			activeJob := &concoursev1alpha1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "job-unpaused", Namespace: "default"},
+				Spec: concoursev1alpha1.JobSpec{
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					JobName:     "deploy",
+					Paused:      false,
+				},
+			}
+			Expect(k8sClient.Create(ctx, activeJob)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, activeJob) })
+
+			reconciler := &JobReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "job-unpaused", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(unpauseCalled).To(BeTrue(), "expected UnpauseJob to be called")
+
+			fetched := &concoursev1alpha1.Job{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.Paused).To(BeFalse())
 		})
 	})
 })

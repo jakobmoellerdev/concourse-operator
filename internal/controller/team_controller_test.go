@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 
+	"github.com/concourse/concourse/atc"
+	goconcourse "github.com/concourse/concourse/go-concourse/concourse"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -147,6 +149,117 @@ var _ = Describe("Team Controller", func() {
 			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		})
+	})
+
+	Context("When Concourse API responds successfully", func() {
+		ctx := context.Background()
+
+		It("should call CreateOrUpdate and set status.TeamID and Ready=True", func() {
+			By("Setting up a ready instance with a fake client")
+			cache := concourse.NewCache()
+			var capturedTeam concoursev1alpha1.Team
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "my-team",
+					createOrUpdateFn: func(t atc.Team) (atc.Team, bool, bool, []goconcourse.ConfigWarning, error) {
+						return atc.Team{ID: 42, Name: t.Name}, true, false, nil, nil
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{Version: "7.11.0"}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "team-happy-instance", cache, fake)
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, inst)
+				_ = capturedTeam
+			})
+
+			team := &concoursev1alpha1.Team{
+				ObjectMeta: metav1.ObjectMeta{Name: "team-happy", Namespace: "default"},
+				Spec: concoursev1alpha1.TeamSpec{
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					TeamName:    "my-team",
+				},
+			}
+			Expect(k8sClient.Create(ctx, team)).To(Succeed())
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Team{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: "team-happy", Namespace: "default"}, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, teamFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			reconciler := &TeamReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "team-happy", Namespace: "default"}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			By("Verifying status.TeamID and Ready=True")
+			fetched := &concoursev1alpha1.Team{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.TeamID).To(Equal(42))
+			capturedTeam = *fetched
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should call DestroyTeam on deletion", func() {
+			By("Setting up a ready instance with a fake client that records DestroyTeam calls")
+			cache := concourse.NewCache()
+			destroyCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "my-del-team",
+					createOrUpdateFn: func(t atc.Team) (atc.Team, bool, bool, []goconcourse.ConfigWarning, error) {
+						return atc.Team{ID: 1, Name: t.Name}, true, false, nil, nil
+					},
+					destroyTeamFn: func(_ string) error {
+						destroyCalled = true
+						return nil
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "team-delete-instance", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+
+			team := &concoursev1alpha1.Team{
+				ObjectMeta: metav1.ObjectMeta{Name: "team-to-delete", Namespace: "default"},
+				Spec: concoursev1alpha1.TeamSpec{
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					TeamName:    "my-del-team",
+				},
+			}
+			Expect(k8sClient.Create(ctx, team)).To(Succeed())
+
+			reconciler := &TeamReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "team-to-delete", Namespace: "default"}
+
+			By("First reconcile adds finalizer")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Deleting triggers DestroyTeam")
+			fetched := &concoursev1alpha1.Team{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, fetched)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(destroyCalled).To(BeTrue(), "expected DestroyTeam to be called during finalization")
 		})
 	})
 })
