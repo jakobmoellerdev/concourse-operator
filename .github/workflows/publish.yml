@@ -265,13 +265,15 @@ jobs:
         if: github.event_name == 'pull_request'
         run: docker load -i /tmp/manager-image.tar
 
-      - name: Pull image into Docker daemon (non-PR)
+      - name: Pull and retag image (non-PR)
         if: github.event_name != 'pull_request'
-        run: docker pull "${{ needs.merge.outputs.image-ref }}"
+        run: |
+          docker pull "${{ needs.merge.outputs.image-ref }}"
+          docker tag "${{ needs.merge.outputs.image-ref }}" "${{ env.LOCAL_IMAGE }}"
 
       - name: Run E2E tests
         env:
-          MANAGER_IMAGE: ${{ github.event_name == 'pull_request' && env.LOCAL_IMAGE || needs.merge.outputs.image-ref }}
+          MANAGER_IMAGE: ${{ env.LOCAL_IMAGE }}
           CERT_MANAGER_INSTALL_SKIP: "true"
         run: go mod tidy && make test-e2e
 
