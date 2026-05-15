@@ -26,35 +26,37 @@ import (
 	"net/http"
 
 	goconcourse "github.com/concourse/concourse/go-concourse/concourse"
+	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	concourcev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 )
 
-// authRoundTripper injects an Authorization header on every request.
-type authRoundTripper struct {
-	base  http.RoundTripper
-	token string
+// flyOAuthClientID and flyOAuthClientSecret are the well-known credentials
+// Concourse's sky/issuer endpoint accepts for the password grant flow.
+const (
+	flyOAuthClientID     = "fly"
+	flyOAuthClientSecret = "Zmx5"
+)
+
+// passwordTokenSource re-runs the OAuth2 password grant each time the cached
+// token is expired. Concourse's dex does not issue refresh tokens for this
+// grant type, so re-authentication is the only way to renew.
+type passwordTokenSource struct {
+	oauthCfg  *oauth2.Config
+	transport http.RoundTripper
+	username  string
+	password  string
 }
 
-func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	r := req.Clone(req.Context())
-	r.Header.Set("Authorization", "Bearer "+a.token)
-	return a.base.RoundTrip(r)
-}
-
-// basicAuthRoundTripper injects Basic auth on every request.
-type basicAuthRoundTripper struct {
-	base     http.RoundTripper
-	username string
-	password string
-}
-
-func (b *basicAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	r := req.Clone(req.Context())
-	r.SetBasicAuth(b.username, b.password)
-	return b.base.RoundTrip(r)
+func (s *passwordTokenSource) Token() (*oauth2.Token, error) {
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Transport: s.transport})
+	token, err := s.oauthCfg.PasswordCredentialsToken(ctx, s.username, s.password) //nolint:staticcheck
+	if err != nil {
+		return nil, fmt.Errorf("oauth2 password grant: %w", err)
+	}
+	return token, nil
 }
 
 // BuildHTTPClient constructs an *http.Client from a Instance spec,
@@ -66,7 +68,6 @@ func BuildHTTPClient(ctx context.Context, k8sClient client.Client, namespace str
 	}
 
 	transport := &http.Transport{TLSClientConfig: tlsCfg}
-	var base http.RoundTripper = transport
 
 	switch {
 	case spec.BasicAuth != nil:
@@ -74,17 +75,44 @@ func BuildHTTPClient(ctx context.Context, k8sClient client.Client, namespace str
 		if err != nil {
 			return nil, fmt.Errorf("read basic auth password: %w", err)
 		}
-		base = &basicAuthRoundTripper{base: transport, username: spec.BasicAuth.Username, password: password}
+		oauthCfg := &oauth2.Config{
+			ClientID:     flyOAuthClientID,
+			ClientSecret: flyOAuthClientSecret,
+			Endpoint:     oauth2.Endpoint{TokenURL: spec.URL + "/sky/issuer/token"},
+			Scopes:       []string{"openid", "profile", "email", "federated:id", "groups"},
+		}
+		src := &passwordTokenSource{
+			oauthCfg:  oauthCfg,
+			transport: transport,
+			username:  spec.BasicAuth.Username,
+			password:  password,
+		}
+		// ReuseTokenSource caches the token in memory and only calls src.Token()
+		// again once the token has expired, making it safe for concurrent use.
+		return &http.Client{
+			Transport: &oauth2.Transport{
+				Source: oauth2.ReuseTokenSource(nil, src),
+				Base:   transport,
+			},
+		}, nil
 
 	case spec.TokenAuth != nil:
 		token, err := readSecretKey(ctx, k8sClient, namespace, spec.TokenAuth.TokenRef)
 		if err != nil {
 			return nil, fmt.Errorf("read token auth: %w", err)
 		}
-		base = &authRoundTripper{base: transport, token: token}
+		return &http.Client{
+			Transport: &oauth2.Transport{
+				Source: oauth2.StaticTokenSource(&oauth2.Token{
+					AccessToken: token,
+					TokenType:   "bearer",
+				}),
+				Base: transport,
+			},
+		}, nil
 	}
 
-	return &http.Client{Transport: base}, nil
+	return &http.Client{Transport: transport}, nil
 }
 
 // NewConcourseClient creates a go-concourse Client from a built http.Client.
