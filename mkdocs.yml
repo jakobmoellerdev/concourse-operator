@@ -62,13 +62,7 @@ nav:
       - authentication/index.md
   - CRD Reference:
       - reference/index.md
-      - Instance: reference/instance.md
-      - Team: reference/team.md
-      - Pipeline: reference/pipeline.md
-      - Job: reference/job.md
-      - Build: reference/build.md
-      - Resource: reference/resource.md
-      - Worker: reference/worker.md
+      - API Reference: reference/api.md
   - Tutorial:
       - tutorial/index.md
   - Development:
