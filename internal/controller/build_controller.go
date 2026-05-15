@@ -196,6 +196,9 @@ func isTerminal(s concoursev1alpha1.BuildPhase) bool {
 func (r *BuildReconciler) watchBuildEvents(ctx context.Context, cl concourseapi.Client, buildID int, key types.NamespacedName) {
 	log := logf.FromContext(ctx).WithValues("buildID", buildID, "build", key)
 	enqueue := func() {
+		if r.eventCh == nil {
+			return
+		}
 		r.eventCh <- ctrlevent.TypedGenericEvent[*concoursev1alpha1.Build]{Object: &concoursev1alpha1.Build{
 			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
 		}}
