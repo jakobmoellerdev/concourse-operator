@@ -1,0 +1,15 @@
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseTeam
+metadata:
+  labels:
+    app.kubernetes.io/name: concourse-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: concourseteam-sample
+spec:
+  instanceRef:
+    name: concourseinstance-sample
+  teamName: main
+  roles:
+    - role: owner
+      users:
+        - local:test

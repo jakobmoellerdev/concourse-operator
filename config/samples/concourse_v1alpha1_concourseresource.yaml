@@ -1,0 +1,12 @@
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseResource
+metadata:
+  labels:
+    app.kubernetes.io/name: concourse-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: concourseresource-sample
+spec:
+  pipelineRef:
+    name: concoursepipeline-sample
+  resourceName: my-repo
+  checkInterval: 5m

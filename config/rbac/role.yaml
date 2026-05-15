@@ -1,0 +1,59 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - concourse.concourse-ci.org
+  resources:
+  - concoursebuilds
+  - concourseinstances
+  - concoursejobs
+  - concoursepipelines
+  - concourseresources
+  - concourseteams
+  - concourseworkers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - concourse.concourse-ci.org
+  resources:
+  - concoursebuilds/finalizers
+  - concourseinstances/finalizers
+  - concoursejobs/finalizers
+  - concoursepipelines/finalizers
+  - concourseresources/finalizers
+  - concourseteams/finalizers
+  - concourseworkers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - concourse.concourse-ci.org
+  resources:
+  - concoursebuilds/status
+  - concourseinstances/status
+  - concoursejobs/status
+  - concoursepipelines/status
+  - concourseresources/status
+  - concourseteams/status
+  - concourseworkers/status
+  verbs:
+  - get
+  - patch
+  - update

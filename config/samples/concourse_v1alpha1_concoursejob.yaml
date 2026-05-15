@@ -1,0 +1,13 @@
+apiVersion: concourse.concourse-ci.org/v1alpha1
+kind: ConcourseJob
+metadata:
+  labels:
+    app.kubernetes.io/name: concourse-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: concoursejob-sample
+spec:
+  pipelineRef:
+    name: concoursepipeline-sample
+  jobName: hello
+  paused: false
+  triggerBuild: false

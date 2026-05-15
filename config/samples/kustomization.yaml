@@ -1,0 +1,10 @@
+## Append samples of your project ##
+resources:
+- concourse_v1alpha1_concourseinstance.yaml
+- concourse_v1alpha1_concourseteam.yaml
+- concourse_v1alpha1_concoursepipeline.yaml
+- concourse_v1alpha1_concoursejob.yaml
+- concourse_v1alpha1_concoursebuild.yaml
+- concourse_v1alpha1_concourseresource.yaml
+- concourse_v1alpha1_concourseworker.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
