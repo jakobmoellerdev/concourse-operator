@@ -25,8 +25,28 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Cache Docker images
+        id: docker-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: /tmp/docker-cache
+          key: docker-${{ hashFiles('docker-compose.yml') }}
+
+      - name: Load cached Docker images
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: |
+          docker load -i /tmp/docker-cache/concourse.tar
+          docker load -i /tmp/docker-cache/postgres.tar
+
       - name: Start Concourse CI
         run: docker compose up -d
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker-cache
+          docker save concourse/concourse -o /tmp/docker-cache/concourse.tar
+          docker save postgres -o /tmp/docker-cache/postgres.tar
 
       - name: Wait for Concourse to be healthy
         run: |
