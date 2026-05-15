@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -76,6 +77,47 @@ var _ = Describe("ConcourseWorker Controller", func() {
 			// Instance doesn't exist: Get returns NotFound → IgnoreNotFound → no error, requeue.
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should set Ready=False with InstanceNotReady reason when instance exists but is not ready", func() {
+			By("Creating an instance without Ready condition")
+			notReadyInst := &concoursev1alpha1.ConcourseInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker-instance-not-ready", Namespace: "default"},
+				Spec:       concoursev1alpha1.ConcourseInstanceSpec{URL: "https://ci.example.com"},
+			}
+			Expect(k8sClient.Create(ctx, notReadyInst)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, notReadyInst) })
+
+			By("Creating a worker referencing the not-ready instance")
+			notReadyWorker := &concoursev1alpha1.ConcourseWorker{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker-instance-check", Namespace: "default"},
+				Spec: concoursev1alpha1.ConcourseWorkerSpec{
+					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: "worker-instance-not-ready"},
+					WorkerName:   "worker-1",
+					DesiredState: concoursev1alpha1.WorkerDesiredStateActive,
+				},
+			}
+			Expect(k8sClient.Create(ctx, notReadyWorker)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, notReadyWorker) })
+
+			reconciler := &ConcourseWorkerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  concourse.NewCache(),
+			}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "worker-instance-check", Namespace: "default"},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			By("Verifying Ready=False with InstanceNotReady reason")
+			fetched := &concoursev1alpha1.ConcourseWorker{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "worker-instance-check", Namespace: "default"}, fetched)).To(Succeed())
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("InstanceNotReady"))
 		})
 	})
 })
