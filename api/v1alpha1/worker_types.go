@@ -78,6 +78,22 @@ type WorkerStatus struct {
 	// +optional
 	ActiveVolumes int `json:"activeVolumes,omitempty"`
 
+	// Version is the worker binary version.
+	// +optional
+	Version string `json:"version,omitempty"`
+
+	// StartTime is when the worker registered with Concourse.
+	// +optional
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+
+	// Ephemeral indicates whether the worker is ephemeral (auto-removed on disconnect).
+	// +optional
+	Ephemeral bool `json:"ephemeral,omitempty"`
+
+	// Team is the team this worker is scoped to; empty means global worker.
+	// +optional
+	Team string `json:"team,omitempty"`
+
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -89,6 +105,8 @@ type WorkerStatus struct {
 // +kubebuilder:printcolumn:name="Worker",type=string,JSONPath=`.spec.workerName`
 // +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.actualState`
 // +kubebuilder:printcolumn:name="Platform",type=string,JSONPath=`.status.platform`
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.version`
+// +kubebuilder:printcolumn:name="Stalled",type=string,JSONPath=`.status.conditions[?(@.type=="Stalled")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Worker manages a worker in a Concourse instance (land, retire, prune).

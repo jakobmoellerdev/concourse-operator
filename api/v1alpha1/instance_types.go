@@ -95,9 +95,29 @@ type InstanceStatus struct {
 	// +optional
 	Version string `json:"version,omitempty"`
 
-	// WorkerCount is the number of healthy workers in this instance.
+	// WorkerVersion is the minimum worker binary version required by this instance.
+	// +optional
+	WorkerVersion string `json:"workerVersion,omitempty"`
+
+	// ClusterName is the human-readable cluster name reported by Concourse.
+	// +optional
+	ClusterName string `json:"clusterName,omitempty"`
+
+	// ExternalURL is the externally-visible URL reported by the Concourse server.
+	// +optional
+	ExternalURL string `json:"externalURL,omitempty"`
+
+	// WorkerCount is the number of running workers in this instance.
 	// +optional
 	WorkerCount int `json:"workerCount,omitempty"`
+
+	// StalledWorkers is the number of workers in the "stalled" state.
+	// +optional
+	StalledWorkers int `json:"stalledWorkers,omitempty"`
+
+	// RunningWorkers is the number of workers in the "running" state.
+	// +optional
+	RunningWorkers int `json:"runningWorkers,omitempty"`
 
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional
@@ -109,6 +129,22 @@ const (
 	ConditionReady = "Ready"
 	// ConditionAuthenticated indicates authentication with Concourse succeeded.
 	ConditionAuthenticated = "Authenticated"
+	// ConditionWorkersHealthy indicates all workers are in the running state.
+	ConditionWorkersHealthy = "WorkersHealthy"
+	// ConditionConfigWarning indicates the last config apply returned warnings.
+	ConditionConfigWarning = "ConfigWarning"
+	// ConditionConfigSynced indicates the pipeline config is applied without error.
+	ConditionConfigSynced = "ConfigSynced"
+	// ConditionLastBuildSucceeded indicates the most recent finished build succeeded.
+	ConditionLastBuildSucceeded = "LastBuildSucceeded"
+	// ConditionCheckHealthy indicates the last resource check succeeded.
+	ConditionCheckHealthy = "CheckHealthy"
+	// ConditionComplete indicates the build has reached a terminal state.
+	ConditionComplete = "Complete"
+	// ConditionStalled indicates the worker is in the stalled state.
+	ConditionStalled = "Stalled"
+	// ConditionStateTransitioning indicates the worker's desired and actual states differ.
+	ConditionStateTransitioning = "StateTransitioning"
 )
 
 // +kubebuilder:object:root=true
@@ -116,6 +152,7 @@ const (
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.spec.url`
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.version`
 // +kubebuilder:printcolumn:name="Workers",type=integer,JSONPath=`.status.workerCount`
+// +kubebuilder:printcolumn:name="Stalled",type=integer,JSONPath=`.status.stalledWorkers`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

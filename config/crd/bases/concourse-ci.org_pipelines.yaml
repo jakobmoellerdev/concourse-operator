@@ -198,6 +198,15 @@ spec:
               exposed:
                 description: Exposed reflects the actual exposed state in Concourse.
                 type: boolean
+              groupCount:
+                description: GroupCount is the number of job groups defined in the
+                  pipeline.
+                type: integer
+              lastUpdated:
+                description: LastUpdated is the timestamp when Concourse last recorded
+                  a change to this pipeline.
+                format: date-time
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the last generation that was reconciled.
                 format: int64

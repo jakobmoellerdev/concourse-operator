@@ -24,6 +24,9 @@ spec:
     - jsonPath: .status.workerCount
       name: Workers
       type: integer
+    - jsonPath: .status.stalledWorkers
+      name: Stalled
+      type: integer
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -139,6 +142,10 @@ spec:
           status:
             description: InstanceStatus defines the observed state of Instance.
             properties:
+              clusterName:
+                description: ClusterName is the human-readable cluster name reported
+                  by Concourse.
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -198,17 +205,33 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              externalURL:
+                description: ExternalURL is the externally-visible URL reported by
+                  the Concourse server.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the last generation that was reconciled.
                 format: int64
+                type: integer
+              runningWorkers:
+                description: RunningWorkers is the number of workers in the "running"
+                  state.
+                type: integer
+              stalledWorkers:
+                description: StalledWorkers is the number of workers in the "stalled"
+                  state.
                 type: integer
               version:
                 description: Version is the Concourse server version string.
                 type: string
               workerCount:
-                description: WorkerCount is the number of healthy workers in this
+                description: WorkerCount is the number of running workers in this
                   instance.
                 type: integer
+              workerVersion:
+                description: WorkerVersion is the minimum worker binary version required
+                  by this instance.
+                type: string
             type: object
         required:
         - spec

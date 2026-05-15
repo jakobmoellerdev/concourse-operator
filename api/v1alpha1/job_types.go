@@ -55,6 +55,18 @@ type JobStatus struct {
 	// +optional
 	NextBuildName string `json:"nextBuildName,omitempty"`
 
+	// LastBuildID is the Concourse ID of the last finished build.
+	// +optional
+	LastBuildID int `json:"lastBuildID,omitempty"`
+
+	// LastBuildStatus is the status of the last finished build.
+	// +optional
+	LastBuildStatus BuildPhase `json:"lastBuildStatus,omitempty"`
+
+	// LastBuildTime is when the last finished build ended.
+	// +optional
+	LastBuildTime *metav1.Time `json:"lastBuildTime,omitempty"`
+
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -65,6 +77,7 @@ type JobStatus struct {
 // +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipelineRef.name`
 // +kubebuilder:printcolumn:name="Job",type=string,JSONPath=`.spec.jobName`
 // +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.status.paused`
+// +kubebuilder:printcolumn:name="LastBuild",type=string,JSONPath=`.status.lastBuildStatus`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

@@ -27,6 +27,12 @@ spec:
     - jsonPath: .status.platform
       name: Platform
       type: string
+    - jsonPath: .status.version
+      name: Version
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Stalled")].status
+      name: Stalled
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -159,6 +165,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              ephemeral:
+                description: Ephemeral indicates whether the worker is ephemeral (auto-removed
+                  on disconnect).
+                type: boolean
               observedGeneration:
                 description: ObservedGeneration is the last generation that was reconciled.
                 format: int64
@@ -166,11 +176,22 @@ spec:
               platform:
                 description: Platform is the worker platform (e.g. linux, darwin).
                 type: string
+              startTime:
+                description: StartTime is when the worker registered with Concourse.
+                format: date-time
+                type: string
               tags:
                 description: Tags are the worker tags.
                 items:
                   type: string
                 type: array
+              team:
+                description: Team is the team this worker is scoped to; empty means
+                  global worker.
+                type: string
+              version:
+                description: Version is the worker binary version.
+                type: string
             type: object
         required:
         - spec

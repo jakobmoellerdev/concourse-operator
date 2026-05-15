@@ -59,6 +59,10 @@ type TeamStatus struct {
 	// +optional
 	TeamID int `json:"teamID,omitempty"`
 
+	// LastApplied is the timestamp of the last successful CreateOrUpdate.
+	// +optional
+	LastApplied *metav1.Time `json:"lastApplied,omitempty"`
+
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`

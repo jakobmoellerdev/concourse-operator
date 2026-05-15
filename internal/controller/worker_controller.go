@@ -98,6 +98,30 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				worker.Status.Tags = w.Tags
 				worker.Status.ActiveContainers = w.ActiveContainers
 				worker.Status.ActiveVolumes = w.ActiveVolumes
+				worker.Status.Version = w.Version
+				worker.Status.Ephemeral = w.Ephemeral
+				worker.Status.Team = w.Team
+				if w.StartTime > 0 {
+					t := metav1.Unix(w.StartTime, 0)
+					worker.Status.StartTime = &t
+				}
+
+				if w.State == "stalled" {
+					setCondition(&worker.Status.Conditions, concoursev1alpha1.ConditionStalled, metav1.ConditionTrue, "Stalled", "worker is stalled")
+				} else {
+					setCondition(&worker.Status.Conditions, concoursev1alpha1.ConditionStalled, metav1.ConditionFalse, "NotStalled", "")
+				}
+
+				desiredState := string(worker.Spec.DesiredState)
+				if desiredState == "" {
+					desiredState = string(concoursev1alpha1.WorkerDesiredStateActive)
+				}
+				if w.State != desiredState {
+					setCondition(&worker.Status.Conditions, concoursev1alpha1.ConditionStateTransitioning, metav1.ConditionTrue, "TransitionPending",
+						fmt.Sprintf("actual %q, desired %q", w.State, desiredState))
+				} else {
+					setCondition(&worker.Status.Conditions, concoursev1alpha1.ConditionStateTransitioning, metav1.ConditionFalse, "Converged", "")
+				}
 				break
 			}
 		}
