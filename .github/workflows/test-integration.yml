@@ -55,5 +55,8 @@ jobs:
           echo ""
           echo "Concourse is ready."
 
+      - name: Setup envtest binaries
+        run: make setup-envtest
+
       - name: Run integration tests
         run: make test-integration

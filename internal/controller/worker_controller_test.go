@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 
+	"github.com/concourse/concourse/atc"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -118,6 +119,179 @@ var _ = Describe("Worker Controller", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal("InstanceNotReady"))
+		})
+	})
+
+	Context("When Concourse API responds successfully", func() {
+		ctx := context.Background()
+
+		It("should sync worker status from ListWorkers when DesiredState=active", func() {
+			By("Setting up a ready instance with a fake client that returns a known worker")
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team:      &fakeTeam{name: "main"},
+				getInfoFn: func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) {
+					return []atc.Worker{
+						{
+							Name:             "worker-a",
+							State:            "running",
+							Platform:         "linux",
+							Tags:             atc.Tags{"tag1"},
+							ActiveContainers: 3,
+							ActiveVolumes:    7,
+						},
+					}, nil
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "wk-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+
+			wk := &concoursev1alpha1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker-status", Namespace: "default"},
+				Spec: concoursev1alpha1.WorkerSpec{
+					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:   "worker-a",
+					DesiredState: concoursev1alpha1.WorkerDesiredStateActive,
+				},
+			}
+			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, wk) })
+
+			reconciler := &WorkerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "worker-status", Namespace: "default"}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			By("Verifying status fields are synced from Concourse")
+			fetched := &concoursev1alpha1.Worker{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.ActualState).To(Equal("running"))
+			Expect(fetched.Status.Platform).To(Equal("linux"))
+			Expect(fetched.Status.Tags).To(ConsistOf("tag1"))
+			Expect(fetched.Status.ActiveContainers).To(Equal(3))
+			Expect(fetched.Status.ActiveVolumes).To(Equal(7))
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should call LandWorker when DesiredState=land", func() {
+			cache := concourse.NewCache()
+			landCalled := false
+			fake := &fakeClient{
+				team:      &fakeTeam{name: "main"},
+				getInfoFn: func() (atc.Info, error) { return atc.Info{}, nil },
+				landWorkerFn: func(name string) error {
+					landCalled = true
+					Expect(name).To(Equal("worker-land"))
+					return nil
+				},
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "wk-land-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+
+			wk := &concoursev1alpha1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker-land-cr", Namespace: "default"},
+				Spec: concoursev1alpha1.WorkerSpec{
+					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:   "worker-land",
+					DesiredState: concoursev1alpha1.WorkerDesiredStateLand,
+				},
+			}
+			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, wk) })
+
+			reconciler := &WorkerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "worker-land-cr", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(landCalled).To(BeTrue(), "expected LandWorker to be called")
+		})
+
+		It("should call PruneWorker when DesiredState=prune", func() {
+			cache := concourse.NewCache()
+			pruneCalled := false
+			fake := &fakeClient{
+				team:      &fakeTeam{name: "main"},
+				getInfoFn: func() (atc.Info, error) { return atc.Info{}, nil },
+				pruneWorkerFn: func(name string) error {
+					pruneCalled = true
+					Expect(name).To(Equal("worker-prune"))
+					return nil
+				},
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "wk-prune-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+
+			wk := &concoursev1alpha1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker-prune-cr", Namespace: "default"},
+				Spec: concoursev1alpha1.WorkerSpec{
+					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:   "worker-prune",
+					DesiredState: concoursev1alpha1.WorkerDesiredStatePrune,
+				},
+			}
+			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, wk) })
+
+			reconciler := &WorkerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "worker-prune-cr", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pruneCalled).To(BeTrue(), "expected PruneWorker to be called")
+		})
+
+		It("should leave status.ActualState empty when worker not found in ListWorkers", func() {
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team:      &fakeTeam{name: "main"},
+				getInfoFn: func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) {
+					return []atc.Worker{{Name: "some-other-worker", State: "running"}}, nil
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "wk-notfound-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+
+			wk := &concoursev1alpha1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker-notfound-cr", Namespace: "default"},
+				Spec: concoursev1alpha1.WorkerSpec{
+					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:   "worker-missing",
+					DesiredState: concoursev1alpha1.WorkerDesiredStateActive,
+				},
+			}
+			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, wk) })
+
+			reconciler := &WorkerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "worker-notfound-cr", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			fetched := &concoursev1alpha1.Worker{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.ActualState).To(BeEmpty(), "worker not found in list should leave ActualState empty")
 		})
 	})
 })

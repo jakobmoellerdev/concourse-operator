@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"time"
 
+	"github.com/concourse/concourse/atc"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -186,6 +188,120 @@ var _ = Describe("Instance Controller", func() {
 			if err == nil {
 				Expect(controllerutil.ContainsFinalizer(afterDeletion, instanceFinalizer)).To(BeFalse())
 			}
+		})
+	})
+
+	Context("When Concourse API responds successfully", func() {
+		ctx := context.Background()
+
+		It("should set Ready=True, Version, and WorkerCount from fake client", func() {
+			By("Creating a fresh instance")
+			inst := &concoursev1alpha1.Instance{
+				ObjectMeta: metav1.ObjectMeta{Name: "instance-happy", Namespace: "default"},
+				Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+			}
+			Expect(k8sClient.Create(ctx, inst)).To(Succeed())
+			nsn := types.NamespacedName{Name: "instance-happy", Namespace: "default"}
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Instance{}
+				if err := k8sClient.Get(ctx, nsn, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, instanceFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team: &fakeTeam{name: "main"},
+				getInfoFn: func() (atc.Info, error) {
+					return atc.Info{Version: "7.11.0"}, nil
+				},
+				listWorkersFn: func() ([]atc.Worker, error) {
+					return []atc.Worker{{Name: "worker-1"}, {Name: "worker-2"}}, nil
+				},
+			}
+
+			reconciler := &InstanceReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+
+			By("First reconcile adds finalizer (cache miss expected)")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Re-fetch to get post-finalizer ResourceVersion, then seed cache")
+			afterFinalizer := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, afterFinalizer)).To(Succeed())
+			cache.Set(afterFinalizer, fake)
+
+			By("Second reconcile hits cache and succeeds")
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(5 * time.Minute))
+
+			By("Verifying status fields and conditions")
+			fetched := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.Version).To(Equal("7.11.0"))
+			Expect(fetched.Status.WorkerCount).To(Equal(2))
+			readyCond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
+			authCond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionAuthenticated)
+			Expect(authCond).NotTo(BeNil())
+			Expect(authCond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should respect a custom interval from spec", func() {
+			By("Creating an instance with a 2-minute interval")
+			twoMin := metav1.Duration{Duration: 2 * time.Minute}
+			inst := &concoursev1alpha1.Instance{
+				ObjectMeta: metav1.ObjectMeta{Name: "instance-interval", Namespace: "default"},
+				Spec: concoursev1alpha1.InstanceSpec{
+					URL:      "https://ci.example.com",
+					Interval: twoMin,
+				},
+			}
+			Expect(k8sClient.Create(ctx, inst)).To(Succeed())
+			nsn := types.NamespacedName{Name: "instance-interval", Namespace: "default"}
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Instance{}
+				if err := k8sClient.Get(ctx, nsn, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, instanceFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team:          &fakeTeam{name: "main"},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{Version: "7.11.0"}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+
+			reconciler := &InstanceReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+
+			By("First reconcile adds finalizer (cache miss expected)")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Re-fetch to get post-finalizer ResourceVersion, then seed cache")
+			afterFinalizer := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, afterFinalizer)).To(Succeed())
+			cache.Set(afterFinalizer, fake)
+
+			By("Second reconcile uses custom interval")
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(2 * time.Minute))
 		})
 	})
 })
