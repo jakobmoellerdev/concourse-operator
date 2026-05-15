@@ -92,7 +92,7 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	auth := buildTeamAuth(team.Spec.Roles)
 	atcTeam := atc.Team{Name: teamName, Auth: auth}
 
-	result, _, _, _, err := cl.Team(teamName).CreateOrUpdate(atcTeam)
+	result, _, _, warnings, err := cl.Team(teamName).CreateOrUpdate(atcTeam)
 	if err != nil {
 		setCondition(&team.Status.Conditions, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "CreateOrUpdateFailed", err.Error())
 		if err2 := r.Status().Update(ctx, team); err2 != nil {
@@ -101,8 +101,22 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	now := metav1.Now()
 	team.Status.TeamID = result.ID
+	team.Status.LastApplied = &now
 	team.Status.ObservedGeneration = team.Generation
+
+	if len(warnings) > 0 {
+		msgs := make([]string, len(warnings))
+		for i, w := range warnings {
+			msgs[i] = w.Message
+		}
+		setCondition(&team.Status.Conditions, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionTrue, "HasWarnings",
+			fmt.Sprintf("%d warning(s): %s", len(warnings), msgs[0]))
+	} else {
+		setCondition(&team.Status.Conditions, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionFalse, "NoWarnings", "")
+	}
+
 	setCondition(&team.Status.Conditions, concoursev1alpha1.ConditionReady, metav1.ConditionTrue, "Ready", "")
 
 	if err := r.Status().Update(ctx, team); err != nil {

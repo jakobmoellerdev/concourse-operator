@@ -109,6 +109,7 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		pipelineRef := atc.PipelineRef{Name: pipelineName}
 		_, _, warnings, err := concourseTeam.CreateOrUpdatePipelineConfig(pipelineRef, "", yamlBytes, false)
 		if err != nil {
+			setCondition(&pipeline.Status.Conditions, concoursev1alpha1.ConditionConfigSynced, metav1.ConditionFalse, "SetPipelineFailed", err.Error())
 			setCondition(&pipeline.Status.Conditions, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "SetPipelineFailed", err.Error())
 			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
 				log.Error(err2, "update status")
@@ -117,7 +118,12 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		if len(warnings) > 0 {
 			log.Info("pipeline config warnings", "warnings", warnings)
+			setCondition(&pipeline.Status.Conditions, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionTrue, "HasWarnings",
+				fmt.Sprintf("%d warning(s): %s", len(warnings), warnings[0].Message))
+		} else {
+			setCondition(&pipeline.Status.Conditions, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionFalse, "NoWarnings", "")
 		}
+		setCondition(&pipeline.Status.Conditions, concoursev1alpha1.ConditionConfigSynced, metav1.ConditionTrue, "Synced", "")
 		pipeline.Status.ConfigHash = newHash
 	}
 
@@ -152,10 +158,15 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// Fetch pipeline ID.
+	// Fetch pipeline ID and metadata.
 	atcPipeline, found, err := concourseTeam.Pipeline(pipelineRef)
 	if err == nil && found {
 		pipeline.Status.PipelineID = atcPipeline.ID
+		pipeline.Status.GroupCount = len(atcPipeline.Groups)
+		if atcPipeline.LastUpdated > 0 {
+			t := metav1.Unix(atcPipeline.LastUpdated, 0)
+			pipeline.Status.LastUpdated = &t
+		}
 	}
 
 	pipeline.Status.ObservedGeneration = pipeline.Generation

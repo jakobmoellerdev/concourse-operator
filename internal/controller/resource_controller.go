@@ -94,10 +94,14 @@ func (r *ResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		if _, _, err := concourseTeam.CheckResource(atc.PipelineRef{Name: pipelineName}, resourceName, version, false); err != nil {
 			log.Error(err, "check resource")
+			setCondition(&resource.Status.Conditions, concoursev1alpha1.ConditionCheckHealthy, metav1.ConditionFalse, "CheckFailed", err.Error())
 		} else {
 			now := metav1.Now()
 			resource.Status.LastChecked = &now
+			setCondition(&resource.Status.Conditions, concoursev1alpha1.ConditionCheckHealthy, metav1.ConditionTrue, "CheckSucceeded", "")
 		}
+	} else if resource.Status.LastChecked == nil {
+		setCondition(&resource.Status.Conditions, concoursev1alpha1.ConditionCheckHealthy, metav1.ConditionUnknown, "CheckPending", "check not yet triggered")
 	}
 
 	// Fetch latest version.

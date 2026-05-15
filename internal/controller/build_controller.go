@@ -126,7 +126,23 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				t := metav1.Unix(atcBuild.EndTime, 0)
 				build.Status.EndTime = &t
 			}
+			if atcBuild.CreatedBy != nil {
+				build.Status.CreatedBy = *atcBuild.CreatedBy
+			}
 		}
+	}
+
+	if build.Status.StartTime != nil && build.Status.EndTime != nil {
+		d := build.Status.EndTime.Sub(build.Status.StartTime.Time)
+		build.Status.Duration = &metav1.Duration{Duration: d}
+	}
+
+	if isTerminal(build.Status.ConcourseStatus) {
+		setCondition(&build.Status.Conditions, concoursev1alpha1.ConditionComplete, metav1.ConditionTrue, string(build.Status.ConcourseStatus), "")
+	} else if build.Status.BuildID != 0 {
+		setCondition(&build.Status.Conditions, concoursev1alpha1.ConditionComplete, metav1.ConditionFalse, "InProgress", "")
+	} else {
+		setCondition(&build.Status.Conditions, concoursev1alpha1.ConditionComplete, metav1.ConditionUnknown, "Pending", "build not yet triggered")
 	}
 
 	build.Status.ObservedGeneration = build.Generation

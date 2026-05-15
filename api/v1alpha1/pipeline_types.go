@@ -102,6 +102,14 @@ type PipelineStatus struct {
 	// +optional
 	Exposed bool `json:"exposed,omitempty"`
 
+	// LastUpdated is the timestamp when Concourse last recorded a change to this pipeline.
+	// +optional
+	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
+
+	// GroupCount is the number of job groups defined in the pipeline.
+	// +optional
+	GroupCount int `json:"groupCount,omitempty"`
+
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`

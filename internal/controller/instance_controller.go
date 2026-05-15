@@ -98,8 +98,31 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	instance.Status.Version = info.Version
+	instance.Status.WorkerVersion = info.WorkerVersion
+	instance.Status.ClusterName = info.ClusterName
+	instance.Status.ExternalURL = info.ExternalURL
 	instance.Status.WorkerCount = len(workers)
 	instance.Status.ObservedGeneration = instance.Generation
+
+	var stalled, running int
+	for _, w := range workers {
+		switch w.State {
+		case "stalled":
+			stalled++
+		case "running":
+			running++
+		}
+	}
+	instance.Status.StalledWorkers = stalled
+	instance.Status.RunningWorkers = running
+
+	if stalled > 0 {
+		setCondition(&instance.Status.Conditions, concoursev1alpha1.ConditionWorkersHealthy, metav1.ConditionFalse, "WorkersStalled",
+			fmt.Sprintf("%d worker(s) stalled", stalled))
+	} else {
+		setCondition(&instance.Status.Conditions, concoursev1alpha1.ConditionWorkersHealthy, metav1.ConditionTrue, "AllRunning", "")
+	}
+
 	setCondition(&instance.Status.Conditions, concoursev1alpha1.ConditionAuthenticated, metav1.ConditionTrue, "Authenticated", "")
 	setCondition(&instance.Status.Conditions, concoursev1alpha1.ConditionReady, metav1.ConditionTrue, "Ready", "")
 

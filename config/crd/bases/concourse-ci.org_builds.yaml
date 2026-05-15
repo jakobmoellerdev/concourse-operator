@@ -24,6 +24,9 @@ spec:
     - jsonPath: .status.concourseStatus
       name: Status
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Complete")].status
+      name: Complete
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -154,6 +157,12 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              createdBy:
+                description: CreatedBy is the user or system that triggered the build.
+                type: string
+              duration:
+                description: Duration is the elapsed time between StartTime and EndTime.
+                type: string
               endTime:
                 description: EndTime is when the build completed.
                 format: date-time

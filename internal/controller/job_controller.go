@@ -112,6 +112,30 @@ func (r *JobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	job.Status.ObservedGeneration = job.Generation
 	setCondition(&job.Status.Conditions, concoursev1alpha1.ConditionReady, metav1.ConditionTrue, "Ready", "")
 
+	// Fetch job info for last build status — non-blocking: failures only set condition Unknown.
+	atcJob, found, err := concourseTeam.Job(pipelineRef, jobName)
+	if err != nil {
+		log.Error(err, "fetch job info")
+		setCondition(&job.Status.Conditions, concoursev1alpha1.ConditionLastBuildSucceeded, metav1.ConditionUnknown, "FetchFailed", err.Error())
+	} else if !found {
+		setCondition(&job.Status.Conditions, concoursev1alpha1.ConditionLastBuildSucceeded, metav1.ConditionUnknown, "NoBuild", "no build history yet")
+	} else if atcJob.FinishedBuild != nil {
+		fb := atcJob.FinishedBuild
+		job.Status.LastBuildID = fb.ID
+		job.Status.LastBuildStatus = concoursev1alpha1.BuildPhase(fb.Status)
+		if fb.EndTime > 0 {
+			t := metav1.Unix(fb.EndTime, 0)
+			job.Status.LastBuildTime = &t
+		}
+		if concoursev1alpha1.BuildPhase(fb.Status) == concoursev1alpha1.BuildPhaseSucceeded {
+			setCondition(&job.Status.Conditions, concoursev1alpha1.ConditionLastBuildSucceeded, metav1.ConditionTrue, "Succeeded", "")
+		} else {
+			setCondition(&job.Status.Conditions, concoursev1alpha1.ConditionLastBuildSucceeded, metav1.ConditionFalse, string(fb.Status), "")
+		}
+	} else {
+		setCondition(&job.Status.Conditions, concoursev1alpha1.ConditionLastBuildSucceeded, metav1.ConditionUnknown, "NoBuild", "no finished build yet")
+	}
+
 	if err := r.Status().Update(ctx, job); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
 	}

@@ -77,9 +77,17 @@ type BuildStatus struct {
 	// +optional
 	EndTime *metav1.Time `json:"endTime,omitempty"`
 
+	// Duration is the elapsed time between StartTime and EndTime.
+	// +optional
+	Duration *metav1.Duration `json:"duration,omitempty"`
+
 	// APIURL is the URL to the build on the Concourse web UI.
 	// +optional
 	APIURL string `json:"apiURL,omitempty"`
+
+	// CreatedBy is the user or system that triggered the build.
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
 
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional
@@ -91,6 +99,7 @@ type BuildStatus struct {
 // +kubebuilder:printcolumn:name="Job",type=string,JSONPath=`.spec.jobRef.name`
 // +kubebuilder:printcolumn:name="BuildID",type=integer,JSONPath=`.status.buildID`
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.concourseStatus`
+// +kubebuilder:printcolumn:name="Complete",type=string,JSONPath=`.status.conditions[?(@.type=="Complete")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Build tracks and optionally triggers a build in Concourse.
