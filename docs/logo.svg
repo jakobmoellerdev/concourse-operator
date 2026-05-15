@@ -1,0 +1,26 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="hull-clip">
+      <polygon points="256,41 442,149 442,364 256,471 70,364 70,149"/>
+    </clipPath>
+    <radialGradient id="spoke-fade" cx="50%" cy="50%" r="50%">
+      <stop offset="55%" stop-color="white" stop-opacity="1"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.5"/>
+    </radialGradient>
+  </defs>
+  <polygon points="256,28 453,143 453,371 256,484 59,371 59,143" fill="white"/>
+  <polygon points="256,41 442,149 442,364 256,471 70,364 70,149" fill="#326CE5"/>
+  <circle cx="256" cy="256" r="162" fill="none" stroke="white" stroke-width="18"
+          stroke-dasharray="60 13" stroke-dashoffset="-6.5" clip-path="url(#hull-clip)"/>
+  <g stroke="white" stroke-width="12" stroke-linecap="round">
+    <line x1="256" y1="96"  x2="256" y2="211"/>
+    <line x1="381" y1="156" x2="291" y2="228"/>
+    <line x1="412" y1="292" x2="300" y2="266"/>
+    <line x1="325" y1="400" x2="276" y2="297"/>
+    <line x1="187" y1="400" x2="237" y2="297"/>
+    <line x1="100" y1="292" x2="212" y2="266"/>
+    <line x1="131" y1="156" x2="221" y2="228"/>
+  </g>
+  <!-- Hub: white disc -->
+  <circle cx="256" cy="256" r="44" fill="white" stroke="white" stroke-width="6"/>
+</svg>
