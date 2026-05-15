@@ -1,8 +1,40 @@
-# Testing with a Local Concourse Instance
+# Testing
 
-This guide explains how to run the operator's integration tests against a real Concourse CI server — the same setup used in CI.
+## Test suites
 
-## Quick start
+=== "Unit tests"
+
+    Run against a fake Kubernetes API server (envtest). No live Concourse required.
+
+    ```bash
+    make test
+    ```
+
+    Tests live in `internal/controller/*_controller_test.go` and use [Ginkgo](https://onsi.github.io/ginkgo/) + [Gomega](https://onsi.github.io/gomega/).
+
+=== "Integration tests"
+
+    Run against a real Concourse instance. Require `make concourse-up` first.
+
+    ```bash
+    make test-integration
+    # equivalent:
+    go test -tags integration -count=1 -timeout 120s ./test/integration/ -v
+    ```
+
+=== "E2E tests"
+
+    Full end-to-end tests against a running cluster with the operator deployed.
+
+    ```bash
+    make test-e2e
+    ```
+
+---
+
+## Local Concourse for integration tests
+
+### Quick start
 
 ```bash
 # 1. Start Concourse (uses the bundled docker-compose.yml)
@@ -17,9 +49,7 @@ make concourse-down
 
 The Concourse instance starts at **http://localhost:8080** with credentials **test / test**.
 
----
-
-## What `concourse-up` does
+### What `concourse-up` does
 
 `make concourse-up` is shorthand for:
 
@@ -47,19 +77,9 @@ Key settings baked in:
 
 ---
 
-## Integration tests
+## Integration test coverage
 
 Tests live under `test/integration/` and use the `integration` build tag so they are excluded from the normal `make test` run.
-
-```bash
-# Run integration tests only
-make test-integration
-
-# Equivalent go command
-go test -tags integration -count=1 -timeout 120s ./test/integration/ -v
-```
-
-### What the tests cover
 
 | Test group | What it verifies |
 |------------|-----------------|
@@ -69,7 +89,7 @@ go test -tags integration -count=1 -timeout 120s ./test/integration/ -v
 | Resource management | List resource versions, trigger a resource check |
 | Build management | Trigger a job build, fetch build status |
 
-### Credentials used by the tests
+### Token acquisition
 
 The tests obtain a short-lived OAuth bearer token at suite startup using the password grant:
 
@@ -78,16 +98,14 @@ POST http://localhost:8080/sky/issuer/token
   grant_type=password
   username=test
   password=test
-  client: fly / Y29uY291cnNlLXdlYgo=  (fly's well-known client credentials)
+  client: fly / Y29uY291cnNlLXdlYgo=
 ```
 
 This is exactly what `fly login` does under the hood.
 
 ---
 
-## Applying the sample CRs
-
-If you want to test the operator itself (not just the raw Concourse API), run it locally against the same Concourse instance.
+## Testing the operator against local Concourse
 
 ### 1. Create the credential secret
 

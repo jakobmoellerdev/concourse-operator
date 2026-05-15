@@ -1,0 +1,124 @@
+site_name: concourse-operator
+site_url: https://jakobmoellerdev.github.io/concourse-operator/
+site_description: Kubernetes operator for managing Concourse CI resources declaratively
+site_author: Jakob Moeller
+repo_url: https://github.com/jakobmoellerdev/concourse-operator
+repo_name: jakobmoellerdev/concourse-operator
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; 2026 Jakob Moeller &mdash; Apache License 2.0
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  favicon: assets/logo.svg
+  logo: assets/logo.svg
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - Prerequisites: getting-started/prerequisites.md
+      - Installation: getting-started/installation.md
+  - Architecture:
+      - architecture/index.md
+      - Dependency Chain: architecture/dependency-chain.md
+      - Client Cache: architecture/client-cache.md
+  - Authentication:
+      - authentication/index.md
+  - CRD Reference:
+      - reference/index.md
+      - ConcourseInstance: reference/concourseinstance.md
+      - ConcourseTeam: reference/concourseteam.md
+      - ConcoursePipeline: reference/concoursepipeline.md
+      - ConcourseJob: reference/concoursejob.md
+      - ConcourseBuild: reference/concoursebuild.md
+      - ConcourseResource: reference/concourseresource.md
+      - ConcourseWorker: reference/concourseworker.md
+  - Tutorial:
+      - tutorial/index.md
+  - Development:
+      - development/index.md
+      - Testing: development/testing.md
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/jakobmoellerdev/concourse-operator
+  generator: false
