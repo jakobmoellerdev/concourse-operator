@@ -65,7 +65,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 
 .PHONY: test-integration
 test-integration: ## Run integration tests against a live Concourse instance (CONCOURSE_URL, CONCOURSE_USER, CONCOURSE_PASS env vars optional).
-	go test -tags integration -count=1 -timeout 120s ./test/integration/ -v
+	go test -tags integration -count=1 -timeout 120s ./test/integration/ -v --ginkgo.v
 
 .PHONY: concourse-up
 concourse-up: ## Start a local Concourse CI instance via docker compose (listens on http://localhost:8080, credentials test:test).
