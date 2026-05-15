@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	concoursev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 )
@@ -84,10 +83,6 @@ func makeReadyPipeline(ctx context.Context, name, teamName string) *concoursev1a
 	return pipeline
 }
 
-// deleteIfExists deletes an object if it exists, ignoring not-found errors.
-func deleteIfExists(ctx context.Context, obj client.Object) {
-	_ = k8sClient.Delete(ctx, obj)
-}
 
 var _ = Describe("isTerminal", func() {
 	DescribeTable("build status terminal detection",
