@@ -1,0 +1,12 @@
+apiVersion: concourse-ci.org/v1alpha1
+kind: Worker
+metadata:
+  labels:
+    app.kubernetes.io/name: concourse-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: worker-sample
+spec:
+  instanceRef:
+    name: instance-sample
+  workerName: worker-1
+  desiredState: active

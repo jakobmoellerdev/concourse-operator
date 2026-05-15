@@ -2,13 +2,13 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/concourse.concourse-ci.org_concourseinstances.yaml
-- bases/concourse.concourse-ci.org_concourseteams.yaml
-- bases/concourse.concourse-ci.org_concoursepipelines.yaml
-- bases/concourse.concourse-ci.org_concoursejobs.yaml
-- bases/concourse.concourse-ci.org_concoursebuilds.yaml
-- bases/concourse.concourse-ci.org_concourseresources.yaml
-- bases/concourse.concourse-ci.org_concourseworkers.yaml
+- bases/concourse-ci.org_instances.yaml
+- bases/concourse-ci.org_teams.yaml
+- bases/concourse-ci.org_pipelines.yaml
+- bases/concourse-ci.org_jobs.yaml
+- bases/concourse-ci.org_builds.yaml
+- bases/concourse-ci.org_resources.yaml
+- bases/concourse-ci.org_workers.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

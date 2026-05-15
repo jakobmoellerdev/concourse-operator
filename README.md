@@ -6,19 +6,19 @@ A Kubernetes operator that manages [Concourse CI](https://concourse-ci.org) reso
 
 `concourse-operator` is built with [kubebuilder v4](https://book.kubebuilder.io) and [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime). It communicates with Concourse via the official [go-concourse](https://github.com/concourse/concourse) client library and supports Concourse v8.2.1+.
 
-**API group:** `concourse.concourse-ci.org/v1alpha1`
+**API group:** `concourse-ci.org/v1alpha1`
 
 **7 CRDs:**
 
 | Resource | Purpose |
 |---|---|
-| `ConcourseInstance` | Connection + auth to a Concourse server |
-| `ConcourseTeam` | Team management with role bindings |
-| `ConcoursePipeline` | Pipeline configuration (inline or ConfigMap-sourced) |
-| `ConcourseJob` | Job pause/unpause and build triggering |
-| `ConcourseBuild` | Build lifecycle tracking and abort control |
-| `ConcourseResource` | Resource version pinning and check intervals |
-| `ConcourseWorker` | Worker lifecycle management (active/land/retire/prune) |
+| `Instance` | Connection + auth to a Concourse server |
+| `Team` | Team management with role bindings |
+| `Pipeline` | Pipeline configuration (inline or ConfigMap-sourced) |
+| `Job` | Job pause/unpause and build triggering |
+| `Build` | Build lifecycle tracking and abort control |
+| `Resource` | Resource version pinning and check intervals |
+| `Worker` | Worker lifecycle management (active/land/retire/prune) |
 
 ## Architecture
 
@@ -28,58 +28,58 @@ Kubernetes Cluster
 │  concourse-operator (controller-runtime manager)             │
 │                                                              │
 │  ┌───────────────────┐    thread-safe client cache           │
-│  │  ConcourseInstance│────────────────────────────────┐      │
+│  │  Instance│────────────────────────────────┐      │
 │  │  (URL, auth, TLS) │                                │      │
 │  └───────────────────┘                                ▼      │
 │          ↑ instanceRef              ┌──────────────────────┐ │
 │  ┌───────────────────┐              │  go-concourse Client │ │
-│  │  ConcourseTeam    │              │  BasicAuth / Token   │ │
+│  │  Team    │              │  BasicAuth / Token   │ │
 │  │  (roles, members) │              │  + optional TLS      │ │
 │  └───────────────────┘              └──────────────────────┘ │
 │          ↑ teamRef                          │ HTTP API        │
 │  ┌───────────────────┐                      ▼                 │
-│  │  ConcoursePipeline│           ┌────────────────────────┐  │
+│  │  Pipeline│           ┌────────────────────────┐  │
 │  │  (YAML config)    │           │   Concourse CI Server  │  │
 │  └───────────────────┘           │   (external)           │  │
 │          ↑ pipelineRef           └────────────────────────┘  │
 │  ┌───────────────────┐  ┌──────────────────┐                 │
-│  │  ConcourseJob     │  │ ConcourseResource│                 │
+│  │  Job     │  │ Resource│                 │
 │  └───────────────────┘  └──────────────────┘                 │
 │          ↑ jobRef                                             │
 │  ┌───────────────────┐  ┌──────────────────┐                 │
-│  │  ConcourseBuild   │  │ ConcourseWorker  │                 │
+│  │  Build   │  │ Worker  │                 │
 │  └───────────────────┘  └──────────────────┘                 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Details
 
-**ConcourseInstance** is the root resource. It holds the Concourse server URL, authentication credentials, and TLS configuration. The operator builds an authenticated HTTP client and stores it in a thread-safe cache keyed by `namespace/name@resourceVersion`. When credentials change the cache is evicted and a fresh client is built.
+**Instance** is the root resource. It holds the Concourse server URL, authentication credentials, and TLS configuration. The operator builds an authenticated HTTP client and stores it in a thread-safe cache keyed by `namespace/name@resourceVersion`. When credentials change the cache is evicted and a fresh client is built.
 
-**ConcourseTeam** references a `ConcourseInstance` and manages a team in Concourse including role bindings (owner, member, pipeline-operator, viewer). The operator creates the team if it does not exist and reconciles role assignments.
+**Team** references a `Instance` and manages a team in Concourse including role bindings (owner, member, pipeline-operator, viewer). The operator creates the team if it does not exist and reconciles role assignments.
 
-**ConcoursePipeline** references a `ConcourseTeam` and manages a pipeline configuration. The operator SHA256-hashes the pipeline YAML to detect config drift and only applies changes when necessary. Pipelines can be paused or exposed via the spec.
+**Pipeline** references a `Team` and manages a pipeline configuration. The operator SHA256-hashes the pipeline YAML to detect config drift and only applies changes when necessary. Pipelines can be paused or exposed via the spec.
 
-**ConcourseJob** references a `ConcoursePipeline` and controls job state (pause/unpause). Setting `triggerBuild: true` triggers a new build.
+**Job** references a `Pipeline` and controls job state (pause/unpause). Setting `triggerBuild: true` triggers a new build.
 
-**ConcourseBuild** references a `ConcourseJob` (or sets `oneOff: true` for standalone builds). The operator tracks the full build lifecycle: `pending → started → succeeded / failed / errored / aborted`. Setting `abort: true` aborts a running build.
+**Build** references a `Job` (or sets `oneOff: true` for standalone builds). The operator tracks the full build lifecycle: `pending → started → succeeded / failed / errored / aborted`. Setting `abort: true` aborts a running build.
 
-**ConcourseResource** references a `ConcoursePipeline` and manages resource version pinning and check intervals.
+**Resource** references a `Pipeline` and manages resource version pinning and check intervals.
 
-**ConcourseWorker** references a `ConcourseInstance` and manages worker lifecycle. Set `desiredState` to `active`, `land`, `retire`, or `prune`.
+**Worker** references a `Instance` and manages worker lifecycle. Set `desiredState` to `active`, `land`, `retire`, or `prune`.
 
 ### Dependency Chain
 
 ```
-ConcourseInstance
-    └── ConcourseTeam
-            └── ConcoursePipeline
-                    ├── ConcourseJob
-                    │       └── ConcourseBuild
-                    └── ConcourseResource
+Instance
+    └── Team
+            └── Pipeline
+                    ├── Job
+                    │       └── Build
+                    └── Resource
 
-ConcourseInstance
-    └── ConcourseWorker
+Instance
+    └── Worker
 ```
 
 Each controller resolves its dependency chain before calling the Concourse API. If a parent resource is not Ready, the child requeues until it is.
@@ -98,11 +98,11 @@ stringData:
   password: your-concourse-password
 ```
 
-### 2. Connect to Concourse — ConcourseInstance
+### 2. Connect to Concourse — Instance
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseInstance
+apiVersion: concourse-ci.org/v1alpha1
+kind: Instance
 metadata:
   name: concourseinstance-sample
   namespace: default
@@ -147,11 +147,11 @@ kubectl get concourseinstance concourseinstance-sample \
   -o jsonpath='{.status.conditions}'
 ```
 
-### 3. Create a Team — ConcourseTeam
+### 3. Create a Team — Team
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseTeam
+apiVersion: concourse-ci.org/v1alpha1
+kind: Team
 metadata:
   name: concourseteam-sample
   namespace: default
@@ -165,13 +165,13 @@ spec:
         - local:test
 ```
 
-### 4. Deploy a Pipeline — ConcoursePipeline
+### 4. Deploy a Pipeline — Pipeline
 
 **Inline config:**
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcoursePipeline
+apiVersion: concourse-ci.org/v1alpha1
+kind: Pipeline
 metadata:
   name: concoursepipeline-sample
   namespace: default
@@ -225,11 +225,11 @@ spec:
         key: ssh-private-key
 ```
 
-### 5. Manage Jobs — ConcourseJob
+### 5. Manage Jobs — Job
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseJob
+apiVersion: concourse-ci.org/v1alpha1
+kind: Job
 metadata:
   name: concoursejob-sample
   namespace: default
@@ -241,11 +241,11 @@ spec:
   triggerBuild: false   # set true to trigger a build on next reconcile
 ```
 
-### 6. Track Builds — ConcourseBuild
+### 6. Track Builds — Build
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseBuild
+apiVersion: concourse-ci.org/v1alpha1
+kind: Build
 metadata:
   name: concoursebuild-sample
   namespace: default
@@ -262,11 +262,11 @@ kubectl get concoursebuild concoursebuild-sample \
   -o jsonpath='{.status.concourseStatus}'
 ```
 
-### 7. Pin Resource Versions — ConcourseResource
+### 7. Pin Resource Versions — Resource
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseResource
+apiVersion: concourse-ci.org/v1alpha1
+kind: Resource
 metadata:
   name: concourseresource-sample
   namespace: default
@@ -277,11 +277,11 @@ spec:
   checkInterval: 5m
 ```
 
-### 8. Manage Workers — ConcourseWorker
+### 8. Manage Workers — Worker
 
 ```yaml
-apiVersion: concourse.concourse-ci.org/v1alpha1
-kind: ConcourseWorker
+apiVersion: concourse-ci.org/v1alpha1
+kind: Worker
 metadata:
   name: concourseworker-sample
   namespace: default

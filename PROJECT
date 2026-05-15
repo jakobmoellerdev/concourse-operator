@@ -14,8 +14,8 @@ resources:
     namespaced: true
   controller: true
   domain: concourse-ci.org
-  group: concourse
-  kind: ConcourseInstance
+  group: ""
+  kind: Instance
   path: github.com/jakobmoellerdev/concourse-operator/api/v1alpha1
   version: v1alpha1
 - api:
@@ -23,8 +23,8 @@ resources:
     namespaced: true
   controller: true
   domain: concourse-ci.org
-  group: concourse
-  kind: ConcourseTeam
+  group: ""
+  kind: Team
   path: github.com/jakobmoellerdev/concourse-operator/api/v1alpha1
   version: v1alpha1
 - api:
@@ -32,8 +32,8 @@ resources:
     namespaced: true
   controller: true
   domain: concourse-ci.org
-  group: concourse
-  kind: ConcoursePipeline
+  group: ""
+  kind: Pipeline
   path: github.com/jakobmoellerdev/concourse-operator/api/v1alpha1
   version: v1alpha1
 - api:
@@ -41,8 +41,8 @@ resources:
     namespaced: true
   controller: true
   domain: concourse-ci.org
-  group: concourse
-  kind: ConcourseJob
+  group: ""
+  kind: Job
   path: github.com/jakobmoellerdev/concourse-operator/api/v1alpha1
   version: v1alpha1
 - api:
@@ -50,8 +50,8 @@ resources:
     namespaced: true
   controller: true
   domain: concourse-ci.org
-  group: concourse
-  kind: ConcourseBuild
+  group: ""
+  kind: Build
   path: github.com/jakobmoellerdev/concourse-operator/api/v1alpha1
   version: v1alpha1
 - api:
@@ -59,8 +59,8 @@ resources:
     namespaced: true
   controller: true
   domain: concourse-ci.org
-  group: concourse
-  kind: ConcourseResource
+  group: ""
+  kind: Resource
   path: github.com/jakobmoellerdev/concourse-operator/api/v1alpha1
   version: v1alpha1
 - api:
@@ -68,8 +68,8 @@ resources:
     namespaced: true
   controller: true
   domain: concourse-ci.org
-  group: concourse
-  kind: ConcourseWorker
+  group: ""
+  kind: Worker
   path: github.com/jakobmoellerdev/concourse-operator/api/v1alpha1
   version: v1alpha1
 version: "3"

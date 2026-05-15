@@ -170,60 +170,60 @@ func main() {
 
 	clientCache := concourse.NewCache()
 
-	if err := (&controller.ConcourseInstanceReconciler{
+	if err := (&controller.InstanceReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Cache:  clientCache,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "concourseinstance")
+		setupLog.Error(err, "Failed to create controller", "controller", "instance")
 		os.Exit(1)
 	}
-	if err := (&controller.ConcourseTeamReconciler{
+	if err := (&controller.TeamReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Cache:  clientCache,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "concourseteam")
+		setupLog.Error(err, "Failed to create controller", "controller", "team")
 		os.Exit(1)
 	}
-	if err := (&controller.ConcoursePipelineReconciler{
+	if err := (&controller.PipelineReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Cache:  clientCache,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "concoursepipeline")
+		setupLog.Error(err, "Failed to create controller", "controller", "pipeline")
 		os.Exit(1)
 	}
-	if err := (&controller.ConcourseJobReconciler{
+	if err := (&controller.JobReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Cache:  clientCache,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "concoursejob")
+		setupLog.Error(err, "Failed to create controller", "controller", "job")
 		os.Exit(1)
 	}
-	if err := (&controller.ConcourseBuildReconciler{
+	if err := (&controller.BuildReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Cache:  clientCache,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "concoursebuild")
+		setupLog.Error(err, "Failed to create controller", "controller", "build")
 		os.Exit(1)
 	}
-	if err := (&controller.ConcourseResourceReconciler{
+	if err := (&controller.ResourceReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Cache:  clientCache,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "concourseresource")
+		setupLog.Error(err, "Failed to create controller", "controller", "resource")
 		os.Exit(1)
 	}
-	if err := (&controller.ConcourseWorkerReconciler{
+	if err := (&controller.WorkerReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Cache:  clientCache,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "concourseworker")
+		setupLog.Error(err, "Failed to create controller", "controller", "worker")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

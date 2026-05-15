@@ -26,7 +26,7 @@ import (
 	concourcev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 )
 
-// Cache stores one Concourse client per ConcourseInstance, keyed by
+// Cache stores one Concourse client per Instance, keyed by
 // "{namespace}/{name}@{resourceVersion}". When the resourceVersion changes
 // (i.e. spec updated), a new client is built and the old one replaced.
 type Cache struct {
@@ -39,13 +39,13 @@ func NewCache() *Cache {
 	return &Cache{store: make(map[string]goconcourse.Client)}
 }
 
-// cacheKey produces a stable key for a ConcourseInstance.
-func cacheKey(instance *concourcev1alpha1.ConcourseInstance) string {
+// cacheKey produces a stable key for a Instance.
+func cacheKey(instance *concourcev1alpha1.Instance) string {
 	return instance.Namespace + "/" + instance.Name + "@" + instance.ResourceVersion
 }
 
 // Get returns a cached client for the given instance, or nil if not cached.
-func (c *Cache) Get(instance *concourcev1alpha1.ConcourseInstance) (goconcourse.Client, bool) {
+func (c *Cache) Get(instance *concourcev1alpha1.Instance) (goconcourse.Client, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cl, ok := c.store[cacheKey(instance)]
@@ -54,7 +54,7 @@ func (c *Cache) Get(instance *concourcev1alpha1.ConcourseInstance) (goconcourse.
 
 // Set stores a client for the given instance, evicting stale entries for the
 // same instance name (different resourceVersion).
-func (c *Cache) Set(instance *concourcev1alpha1.ConcourseInstance, cl goconcourse.Client) {
+func (c *Cache) Set(instance *concourcev1alpha1.Instance, cl goconcourse.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	prefix := instance.Namespace + "/" + instance.Name + "@"
@@ -67,7 +67,7 @@ func (c *Cache) Set(instance *concourcev1alpha1.ConcourseInstance, cl goconcours
 }
 
 // Evict removes all cached clients for the given instance name.
-func (c *Cache) Evict(instance *concourcev1alpha1.ConcourseInstance) {
+func (c *Cache) Evict(instance *concourcev1alpha1.Instance) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	prefix := instance.Namespace + "/" + instance.Name + "@"
@@ -80,7 +80,7 @@ func (c *Cache) Evict(instance *concourcev1alpha1.ConcourseInstance) {
 
 // GetOrBuild returns a cached client for the instance, building a new one if
 // not present. It stores the built client in the cache before returning.
-func (c *Cache) GetOrBuild(ctx context.Context, k8sClient client.Client, instance *concourcev1alpha1.ConcourseInstance) (goconcourse.Client, error) {
+func (c *Cache) GetOrBuild(ctx context.Context, k8sClient client.Client, instance *concourcev1alpha1.Instance) (goconcourse.Client, error) {
 	if cl, ok := c.Get(instance); ok {
 		return cl, nil
 	}

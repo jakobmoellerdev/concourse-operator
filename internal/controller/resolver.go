@@ -30,8 +30,8 @@ import (
 )
 
 // resolveInstanceForTeam returns the Concourse client for a team.
-func resolveInstanceForTeam(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, team *concoursev1alpha1.ConcourseTeam) (goconcourse.Client, error) {
-	instance := &concoursev1alpha1.ConcourseInstance{}
+func resolveInstanceForTeam(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, team *concoursev1alpha1.Team) (goconcourse.Client, error) {
+	instance := &concoursev1alpha1.Instance{}
 	key := client.ObjectKey{Namespace: team.Namespace, Name: team.Spec.InstanceRef.Name}
 	if err := k8sClient.Get(ctx, key, instance); err != nil {
 		return nil, fmt.Errorf("get instance %s: %w", team.Spec.InstanceRef.Name, err)
@@ -47,8 +47,8 @@ func resolveInstanceForTeam(ctx context.Context, k8sClient client.Client, cache 
 }
 
 // resolveClientForPipeline returns the Concourse client and team name for a pipeline.
-func resolveClientForPipeline(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, pipeline *concoursev1alpha1.ConcoursePipeline) (goconcourse.Client, string, error) {
-	team := &concoursev1alpha1.ConcourseTeam{}
+func resolveClientForPipeline(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, pipeline *concoursev1alpha1.Pipeline) (goconcourse.Client, string, error) {
+	team := &concoursev1alpha1.Team{}
 	key := client.ObjectKey{Namespace: pipeline.Namespace, Name: pipeline.Spec.TeamRef.Name}
 	if err := k8sClient.Get(ctx, key, team); err != nil {
 		return nil, "", fmt.Errorf("get team %s: %w", pipeline.Spec.TeamRef.Name, err)
@@ -68,8 +68,8 @@ func resolveClientForPipeline(ctx context.Context, k8sClient client.Client, cach
 }
 
 // resolveClientForJob returns the Concourse client, team name, and pipeline name for a job.
-func resolveClientForJob(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, job *concoursev1alpha1.ConcourseJob) (goconcourse.Client, string, string, error) {
-	pipeline := &concoursev1alpha1.ConcoursePipeline{}
+func resolveClientForJob(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, job *concoursev1alpha1.Job) (goconcourse.Client, string, string, error) {
+	pipeline := &concoursev1alpha1.Pipeline{}
 	key := client.ObjectKey{Namespace: job.Namespace, Name: job.Spec.PipelineRef.Name}
 	if err := k8sClient.Get(ctx, key, pipeline); err != nil {
 		return nil, "", "", fmt.Errorf("get pipeline %s: %w", job.Spec.PipelineRef.Name, err)

@@ -57,9 +57,9 @@ func (b *basicAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	return b.base.RoundTrip(r)
 }
 
-// BuildHTTPClient constructs an *http.Client from a ConcourseInstance spec,
+// BuildHTTPClient constructs an *http.Client from a Instance spec,
 // reading Secret values from the Kubernetes API via k8sClient.
-func BuildHTTPClient(ctx context.Context, k8sClient client.Client, namespace string, spec concourcev1alpha1.ConcourseInstanceSpec) (*http.Client, error) {
+func BuildHTTPClient(ctx context.Context, k8sClient client.Client, namespace string, spec concourcev1alpha1.InstanceSpec) (*http.Client, error) {
 	tlsCfg, err := buildTLSConfig(ctx, k8sClient, namespace, spec.TLS)
 	if err != nil {
 		return nil, fmt.Errorf("build TLS config: %w", err)

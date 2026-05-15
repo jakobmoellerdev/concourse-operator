@@ -22,25 +22,25 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the concourse-operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- concourseworker_admin_role.yaml
-- concourseworker_editor_role.yaml
-- concourseworker_viewer_role.yaml
-- concourseresource_admin_role.yaml
-- concourseresource_editor_role.yaml
-- concourseresource_viewer_role.yaml
-- concoursebuild_admin_role.yaml
-- concoursebuild_editor_role.yaml
-- concoursebuild_viewer_role.yaml
-- concoursejob_admin_role.yaml
-- concoursejob_editor_role.yaml
-- concoursejob_viewer_role.yaml
-- concoursepipeline_admin_role.yaml
-- concoursepipeline_editor_role.yaml
-- concoursepipeline_viewer_role.yaml
-- concourseteam_admin_role.yaml
-- concourseteam_editor_role.yaml
-- concourseteam_viewer_role.yaml
-- concourseinstance_admin_role.yaml
-- concourseinstance_editor_role.yaml
-- concourseinstance_viewer_role.yaml
+- worker_admin_role.yaml
+- worker_editor_role.yaml
+- worker_viewer_role.yaml
+- resource_admin_role.yaml
+- resource_editor_role.yaml
+- resource_viewer_role.yaml
+- build_admin_role.yaml
+- build_editor_role.yaml
+- build_viewer_role.yaml
+- job_admin_role.yaml
+- job_editor_role.yaml
+- job_viewer_role.yaml
+- pipeline_admin_role.yaml
+- pipeline_editor_role.yaml
+- pipeline_viewer_role.yaml
+- team_admin_role.yaml
+- team_editor_role.yaml
+- team_viewer_role.yaml
+- instance_admin_role.yaml
+- instance_editor_role.yaml
+- instance_viewer_role.yaml
 
