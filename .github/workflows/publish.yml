@@ -74,7 +74,7 @@ jobs:
       - name: Build and push (publish)
         id: build-push
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198f0a3eb6098d # v6.18.0
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -89,7 +89,7 @@ jobs:
 
       - name: Build and load (PR)
         if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198f0a3eb6098d # v6.18.0
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/amd64
