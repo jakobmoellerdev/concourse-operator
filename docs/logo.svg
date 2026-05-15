@@ -7,13 +7,10 @@
       <stop offset="55%" stop-color="white" stop-opacity="1"/>
       <stop offset="100%" stop-color="white" stop-opacity="0.5"/>
     </radialGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="4" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
+    <!-- Clip stream lines to hub disc -->
+    <clipPath id="hub-clip">
+      <circle cx="256" cy="256" r="36"/>
+    </clipPath>
   </defs>
   <polygon points="256,28 453,143 453,371 256,484 59,371 59,143" fill="white"/>
   <polygon points="256,41 442,149 442,364 256,471 70,364 70,149" fill="#326CE5"/>
@@ -28,18 +25,16 @@
     <line x1="100" y1="292" x2="212" y2="266"/>
     <line x1="131" y1="156" x2="221" y2="228"/>
   </g>
-  <circle cx="256" cy="256" r="44" fill="#326CE5" stroke="white" stroke-width="14"/>
-  <ellipse cx="222" cy="228" rx="52" ry="30" transform="rotate(-45 222 228)"
-           fill="none" stroke="#44BC8E" stroke-width="9" filter="url(#glow)"/>
-  <ellipse cx="222" cy="228" rx="52" ry="30" transform="rotate(-45 222 228)"
-           fill="#44BC8E" fill-opacity="0.18"/>
-  <ellipse cx="290" cy="284" rx="52" ry="30" transform="rotate(-45 290 284)"
-           fill="none" stroke="#44BC8E" stroke-width="9" filter="url(#glow)"/>
-  <ellipse cx="290" cy="284" rx="52" ry="30" transform="rotate(-45 290 284)"
-           fill="#44BC8E" fill-opacity="0.18"/>
-  <polygon points="322,296 314,316 304,301" fill="#44BC8E" filter="url(#glow)"/>
-  <circle cx="256" cy="256" r="9" fill="#44BC8E" filter="url(#glow)"/>
-  <circle cx="256" cy="256" r="4" fill="white"/>
+  <!-- Hub: white disc -->
+  <circle cx="256" cy="256" r="44" fill="white" stroke="white" stroke-width="6"/>
+  <!-- Concourse stream lines clipped to hub — 3 horizontal lines, green -->
+  <g clip-path="url(#hub-clip)" stroke="#44BC8E" stroke-width="7" stroke-linecap="round" fill="none">
+    <line x1="218" y1="244" x2="294" y2="244"/>
+    <line x1="218" y1="256" x2="294" y2="256"/>
+    <line x1="218" y1="268" x2="294" y2="268"/>
+  </g>
+  <!-- Arrow head to the right of hub, pointing right — Concourse "flow" direction -->
+  <polygon points="298,249 311,256 298,263" fill="#44BC8E"/>
   <text x="256" y="520"
         font-family="'Inter','Helvetica Neue',Helvetica,Arial,sans-serif"
         font-size="40" font-weight="700" letter-spacing="-0.5"
