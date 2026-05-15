@@ -32,11 +32,18 @@ import (
 )
 
 var (
-	// managerImage is the manager image to be built and loaded for testing.
+	// managerImage is the manager image used for testing.
+	// Override with MANAGER_IMAGE env var to skip local build and use a pre-built image.
 	managerImage = "example.com/concourse-operator:v0.0.1"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
+
+func init() {
+	if img := os.Getenv("MANAGER_IMAGE"); img != "" {
+		managerImage = img
+	}
+}
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
 // The default setup requires Kind and CertManager.
@@ -51,15 +58,17 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	By("building the manager image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
-	_, err := utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
+	if os.Getenv("MANAGER_IMAGE") == "" {
+		By("building the manager image")
+		cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
+		_, err := utils.Run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
+	}
 
 	// TODO(user): If you want to change the e2e test vendor from Kind,
 	// ensure the image is built and available, then remove the following block.
 	By("loading the manager image on Kind")
-	err = utils.LoadImageToKindClusterWithName(managerImage)
+	err := utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
 
 	configureKubectlKubeRC()
