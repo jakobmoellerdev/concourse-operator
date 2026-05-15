@@ -29,21 +29,21 @@ import (
 	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
 )
 
-// resolveInstanceForTeam returns the ConcourseInstance and Concourse client for a team.
-func resolveInstanceForTeam(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, team *concoursev1alpha1.ConcourseTeam) (*concoursev1alpha1.ConcourseInstance, goconcourse.Client, error) {
+// resolveInstanceForTeam returns the Concourse client for a team.
+func resolveInstanceForTeam(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, team *concoursev1alpha1.ConcourseTeam) (goconcourse.Client, error) {
 	instance := &concoursev1alpha1.ConcourseInstance{}
 	key := client.ObjectKey{Namespace: team.Namespace, Name: team.Spec.InstanceRef.Name}
 	if err := k8sClient.Get(ctx, key, instance); err != nil {
-		return nil, nil, fmt.Errorf("get instance %s: %w", team.Spec.InstanceRef.Name, err)
+		return nil, fmt.Errorf("get instance %s: %w", team.Spec.InstanceRef.Name, err)
 	}
 	if !meta.IsStatusConditionTrue(instance.Status.Conditions, concoursev1alpha1.ConditionReady) {
-		return nil, nil, fmt.Errorf("instance %s is not ready", instance.Name)
+		return nil, fmt.Errorf("instance %s is not ready", instance.Name)
 	}
 	cl, err := cache.GetOrBuild(ctx, k8sClient, instance)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get client for instance %s: %w", instance.Name, err)
+		return nil, fmt.Errorf("get client for instance %s: %w", instance.Name, err)
 	}
-	return instance, cl, nil
+	return cl, nil
 }
 
 // resolveClientForPipeline returns the Concourse client and team name for a pipeline.
@@ -56,7 +56,7 @@ func resolveClientForPipeline(ctx context.Context, k8sClient client.Client, cach
 	if !meta.IsStatusConditionTrue(team.Status.Conditions, concoursev1alpha1.ConditionReady) {
 		return nil, "", fmt.Errorf("team %s is not ready", team.Name)
 	}
-	_, cl, err := resolveInstanceForTeam(ctx, k8sClient, cache, team)
+	cl, err := resolveInstanceForTeam(ctx, k8sClient, cache, team)
 	if err != nil {
 		return nil, "", err
 	}

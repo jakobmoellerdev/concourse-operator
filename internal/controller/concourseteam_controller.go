@@ -75,7 +75,7 @@ func (r *ConcourseTeamReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	_, cl, err := resolveInstanceForTeam(ctx, r.Client, r.Cache, team)
+	cl, err := resolveInstanceForTeam(ctx, r.Client, r.Cache, team)
 	if err != nil {
 		setCondition(&team.Status.Conditions, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "InstanceNotReady", err.Error())
 		if err2 := r.Status().Update(ctx, team); err2 != nil {
@@ -112,7 +112,7 @@ func (r *ConcourseTeamReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 
 func (r *ConcourseTeamReconciler) deleteTeam(ctx context.Context, team *concoursev1alpha1.ConcourseTeam) error {
-	_, cl, err := resolveInstanceForTeam(ctx, r.Client, r.Cache, team)
+	cl, err := resolveInstanceForTeam(ctx, r.Client, r.Cache, team)
 	if err != nil {
 		return err
 	}
