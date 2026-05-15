@@ -7,10 +7,6 @@
       <stop offset="55%" stop-color="white" stop-opacity="1"/>
       <stop offset="100%" stop-color="white" stop-opacity="0.5"/>
     </radialGradient>
-    <!-- Clip stream lines to hub disc -->
-    <clipPath id="hub-clip">
-      <circle cx="256" cy="256" r="36"/>
-    </clipPath>
   </defs>
   <polygon points="256,28 453,143 453,371 256,484 59,371 59,143" fill="white"/>
   <polygon points="256,41 442,149 442,364 256,471 70,364 70,149" fill="#326CE5"/>
@@ -27,14 +23,6 @@
   </g>
   <!-- Hub: white disc -->
   <circle cx="256" cy="256" r="44" fill="white" stroke="white" stroke-width="6"/>
-  <!-- Concourse stream lines clipped to hub — 3 horizontal lines, green -->
-  <g clip-path="url(#hub-clip)" stroke="#44BC8E" stroke-width="7" stroke-linecap="round" fill="none">
-    <line x1="218" y1="244" x2="294" y2="244"/>
-    <line x1="218" y1="256" x2="294" y2="256"/>
-    <line x1="218" y1="268" x2="294" y2="268"/>
-  </g>
-  <!-- Arrow head to the right of hub, pointing right — Concourse "flow" direction -->
-  <polygon points="298,249 311,256 298,263" fill="#44BC8E"/>
   <text x="256" y="520"
         font-family="'Inter','Helvetica Neue',Helvetica,Arial,sans-serif"
         font-size="40" font-weight="700" letter-spacing="-0.5"
