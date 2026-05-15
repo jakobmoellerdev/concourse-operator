@@ -63,11 +63,6 @@ var _ = BeforeSuite(func() {
 		cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
 		_, err := utils.Run(cmd)
 		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
-	} else {
-		By("pulling pre-built manager image")
-		cmd := exec.Command("docker", "pull", managerImage)
-		_, err := utils.Run(cmd)
-		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to pull the manager image")
 	}
 
 	// TODO(user): If you want to change the e2e test vendor from Kind,
