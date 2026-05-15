@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -75,6 +76,49 @@ var _ = Describe("ConcourseResource Controller", func() {
 			// Pipeline doesn't exist: IgnoreNotFound → reconciler returns no error.
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should set Ready=False when pipeline exists but is not ready", func() {
+			By("Creating a pipeline with no Ready condition")
+			notReadyPipeline := &concoursev1alpha1.ConcoursePipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "resource-pipeline-not-ready", Namespace: "default"},
+				Spec: concoursev1alpha1.ConcoursePipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: "some-team"},
+					Config:  concoursev1alpha1.PipelineConfig{Inline: "jobs: []"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, notReadyPipeline)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, notReadyPipeline) })
+
+			By("Creating a ConcourseResource referencing it")
+			cr := &concoursev1alpha1.ConcourseResource{
+				ObjectMeta: metav1.ObjectMeta{Name: "resource-pipeline-check", Namespace: "default"},
+				Spec: concoursev1alpha1.ConcourseResourceSpec{
+					PipelineRef:  concoursev1alpha1.LocalObjectReference{Name: "resource-pipeline-not-ready"},
+					ResourceName: "my-git",
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			reconciler := &ConcourseResourceReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  concourse.NewCache(),
+			}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "resource-pipeline-check", Namespace: "default"},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			By("Verifying Ready=False is set with PipelineNotReady reason")
+			fetched := &concoursev1alpha1.ConcourseResource{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "resource-pipeline-check", Namespace: "default"}, fetched)).To(Succeed())
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("PipelineNotReady"))
 		})
 	})
 })
