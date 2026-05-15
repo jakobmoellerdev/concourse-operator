@@ -212,7 +212,7 @@ func (r *BuildReconciler) watchBuildEvents(ctx context.Context, cl concourseapi.
 		enqueue()
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	for {
 		select {
