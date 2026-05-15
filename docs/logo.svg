@@ -1,108 +1,51 @@
 <svg viewBox="0 0 512 590" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Radial gradient: green at hub → blue at rim -->
-    <radialGradient id="rg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#44BC8E"/>
-      <stop offset="100%" stop-color="#326CE5"/>
-    </radialGradient>
-    <!-- Clip streams to wheel disc -->
-    <clipPath id="wc">
-      <circle cx="256" cy="256" r="182"/>
+    <clipPath id="hull-clip">
+      <polygon points="256,41 442,149 442,364 256,471 70,364 70,149"/>
     </clipPath>
+    <radialGradient id="spoke-fade" cx="50%" cy="50%" r="50%">
+      <stop offset="55%" stop-color="white" stop-opacity="1"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.5"/>
+    </radialGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-
-  <!-- ─── Outer ring ─── -->
-  <circle cx="256" cy="256" r="185"
-          fill="none" stroke="#326CE5" stroke-width="26"/>
-
-  <!-- ─── 7 curved spokes (blue rim → green hub) ─── -->
-  <!--
-    Rim positions (r=185):
-      0: (256.0,  71.0)   top
-      1: (400.6, 140.7)   upper-right
-      2: (436.4, 297.2)   right
-      3: (336.3, 422.7)   lower-right
-      4: (175.7, 422.7)   lower-left
-      5: ( 75.6, 297.2)   left
-      6: (111.4, 140.7)   upper-left
-    Hub circle r=40, so spokes end ~40px from center.
-    Cubic bezier: control points pull spoke into a gentle S-curve
-    to evoke flowing water / concourse stream feel.
-  -->
-  <g stroke="url(#rg)" stroke-width="13" stroke-linecap="round" fill="none">
-    <!-- Spoke 0: top → hub -->
-    <path d="M 256,77  C 248,140 248,195 256,216"/>
-    <!-- Spoke 1: upper-right → hub -->
-    <path d="M 395,147 C 360,175 315,205 270,243"/>
-    <!-- Spoke 2: right → hub -->
-    <path d="M 430,294 C 390,283 345,268 296,258"/>
-    <!-- Spoke 3: lower-right → hub -->
-    <path d="M 331,416 C 315,378 295,335 268,270"/>
-    <!-- Spoke 4: lower-left → hub -->
-    <path d="M 181,416 C 197,378 217,335 244,270"/>
-    <!-- Spoke 5: left → hub -->
-    <path d="M  82,294 C 122,283 167,268 216,258"/>
-    <!-- Spoke 6: upper-left → hub -->
-    <path d="M 117,147 C 152,175 197,205 242,243"/>
+  <polygon points="256,28 453,143 453,371 256,484 59,371 59,143" fill="white"/>
+  <polygon points="256,41 442,149 442,364 256,471 70,364 70,149" fill="#326CE5"/>
+  <circle cx="256" cy="256" r="162" fill="none" stroke="white" stroke-width="18"
+          stroke-dasharray="60 13" stroke-dashoffset="-6.5" clip-path="url(#hull-clip)"/>
+  <g stroke="white" stroke-width="12" stroke-linecap="round">
+    <line x1="256" y1="96"  x2="256" y2="211"/>
+    <line x1="381" y1="156" x2="291" y2="228"/>
+    <line x1="412" y1="292" x2="300" y2="266"/>
+    <line x1="325" y1="400" x2="276" y2="297"/>
+    <line x1="187" y1="400" x2="237" y2="297"/>
+    <line x1="100" y1="292" x2="212" y2="266"/>
+    <line x1="131" y1="156" x2="221" y2="228"/>
   </g>
-
-  <!-- ─── Concourse stream lines through the wheel ─── -->
-  <!--
-    3 horizontal wavy paths clipped to the wheel disc.
-    They pass OVER the outer ring edges, creating the illusion
-    that the stream flows through the wheel.
-  -->
-  <!-- Streams rendered in two layers: dim under spokes, bright at edges -->
-  <g clip-path="url(#wc)" stroke="#44BC8E" stroke-width="7"
-     stroke-linecap="round" fill="none" opacity="0.9">
-    <!-- Stream top -->
-    <path d="M 68,222 C 105,212 130,238 170,224
-                       S 228,207 268,224
-                       S 330,242 370,224
-                       S 420,210 444,218"/>
-    <!-- Stream middle -->
-    <path d="M 68,256 C 105,246 130,272 170,258
-                       S 228,241 268,258
-                       S 330,276 370,258
-                       S 420,244 444,252"/>
-    <!-- Stream bottom -->
-    <path d="M 68,290 C 105,280 130,306 170,292
-                       S 228,275 268,292
-                       S 330,310 370,292
-                       S 420,278 444,286"/>
-  </g>
-  <!-- Bright accent on stream edges (outside clip = over the ring) -->
-  <g stroke="#44BC8E" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.7">
-    <!-- Left tail of middle stream -->
-    <path d="M 68,256 C 72,250 78,262 85,256"/>
-    <!-- Right tail of middle stream -->
-    <path d="M 427,256 C 432,250 438,262 444,256"/>
-  </g>
-
-  <!-- ─── Hub backing ─── -->
-  <circle cx="256" cy="256" r="42" fill="white"/>
-
-  <!-- ─── Concourse CI mark: diamond ring + center dot ─── -->
-  <!-- Outer diamond outline -->
-  <polygon points="256,220 286,256 256,292 226,256"
-           fill="none" stroke="#44BC8E" stroke-width="7" stroke-linejoin="round"/>
-  <!-- Inner filled diamond -->
-  <polygon points="256,238 270,256 256,274 242,256"
-           fill="#44BC8E"/>
-  <!-- Center dot -->
-  <circle cx="256" cy="256" r="6" fill="white"/>
-
-  <!-- Blue hub ring -->
-  <circle cx="256" cy="256" r="42"
-          fill="none" stroke="#326CE5" stroke-width="4"/>
-
-  <!-- ─── Wordmark ─── -->
-  <text x="256" y="498"
+  <circle cx="256" cy="256" r="44" fill="#326CE5" stroke="white" stroke-width="14"/>
+  <ellipse cx="222" cy="228" rx="52" ry="30" transform="rotate(-45 222 228)"
+           fill="none" stroke="#44BC8E" stroke-width="9" filter="url(#glow)"/>
+  <ellipse cx="222" cy="228" rx="52" ry="30" transform="rotate(-45 222 228)"
+           fill="#44BC8E" fill-opacity="0.18"/>
+  <ellipse cx="290" cy="284" rx="52" ry="30" transform="rotate(-45 290 284)"
+           fill="none" stroke="#44BC8E" stroke-width="9" filter="url(#glow)"/>
+  <ellipse cx="290" cy="284" rx="52" ry="30" transform="rotate(-45 290 284)"
+           fill="#44BC8E" fill-opacity="0.18"/>
+  <polygon points="322,296 314,316 304,301" fill="#44BC8E" filter="url(#glow)"/>
+  <circle cx="256" cy="256" r="9" fill="#44BC8E" filter="url(#glow)"/>
+  <circle cx="256" cy="256" r="4" fill="white"/>
+  <text x="256" y="520"
         font-family="'Inter','Helvetica Neue',Helvetica,Arial,sans-serif"
-        font-size="38" font-weight="700" letter-spacing="0.5"
+        font-size="40" font-weight="700" letter-spacing="-0.5"
         text-anchor="middle" fill="#326CE5">concourse</text>
-  <text x="256" y="543"
+  <text x="256" y="563"
         font-family="'Inter','Helvetica Neue',Helvetica,Arial,sans-serif"
-        font-size="26" font-weight="400" letter-spacing="4"
+        font-size="27" font-weight="400" letter-spacing="5"
         text-anchor="middle" fill="#44BC8E">operator</text>
 </svg>
