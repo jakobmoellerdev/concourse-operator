@@ -55,5 +55,10 @@ jobs:
           echo ""
           echo "Concourse is ready."
 
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
       - name: Run integration tests
-        run: make test-integration
+        run: task test-integration

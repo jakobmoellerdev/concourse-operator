@@ -31,6 +31,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
       - name: Cache kind binary
         id: cache-kind
         uses: actions/cache@v4
@@ -50,7 +55,7 @@ jobs:
         run: kind version
 
       - name: Generate manifests and code
-        run: make manifests generate fmt vet
+        run: task manifests generate fmt vet
 
       - name: Build manager image (cached)
         run: |

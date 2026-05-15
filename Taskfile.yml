@@ -1,0 +1,328 @@
+# https://taskfile.dev
+version: '3'
+
+vars:
+  IMG: '{{.IMG | default "controller:latest"}}'
+  YEAR:
+    sh: date +%Y
+  CONTAINER_TOOL: '{{.CONTAINER_TOOL | default "docker"}}'
+  LOCALBIN:
+    sh: echo "$(pwd)/bin"
+  KUSTOMIZE_VERSION: v5.8.1
+  CONTROLLER_TOOLS_VERSION: v0.20.1
+  GOLANGCI_LINT_VERSION: v2.11.4
+  ENVTEST_VERSION:
+    sh: |
+      v=$(go list -m -json sigs.k8s.io/controller-runtime 2>/dev/null | grep -oP '"Version":\s*"\K[^"]+' | head -1)
+      if [ -z "$v" ]; then echo "release-0.20"; exit 0; fi
+      echo "$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/'
+  ENVTEST_K8S_VERSION:
+    sh: |
+      v=$(go list -m -json k8s.io/api 2>/dev/null | grep -oP '"Version":\s*"\K[^"]+' | head -1)
+      if [ -z "$v" ]; then echo "1.31"; exit 0; fi
+      echo "$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/'
+  KUBECTL: '{{.KUBECTL | default "kubectl"}}'
+  KIND: '{{.KIND | default "kind"}}'
+  KIND_CLUSTER: '{{.KIND_CLUSTER | default "concourse-operator-test-e2e"}}'
+  KUSTOMIZE: '{{.LOCALBIN}}/kustomize'
+  CONTROLLER_GEN: '{{.LOCALBIN}}/controller-gen'
+  ENVTEST: '{{.LOCALBIN}}/setup-envtest'
+  GOLANGCI_LINT: '{{.LOCALBIN}}/golangci-lint'
+  PLATFORMS: linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+  IGNORE_NOT_FOUND: '{{.IGNORE_NOT_FOUND | default "false"}}'
+
+tasks:
+  default:
+    desc: Build manager binary
+    cmds:
+      - task: build
+
+  # ── Tool Installation ──────────────────────────────────────────────────
+
+  _localbin:
+    internal: true
+    cmds:
+      - mkdir -p "{{.LOCALBIN}}"
+    status:
+      - test -d "{{.LOCALBIN}}"
+
+  _install-tool:
+    internal: true
+    deps: [_localbin]
+    vars:
+      TARGET: '{{.TARGET}}'
+      PKG: '{{.PKG}}'
+      VERSION: '{{.VERSION}}'
+    cmds:
+      - |
+        target="{{.TARGET}}"
+        version="{{.VERSION}}"
+        if [ -f "${target}-${version}" ] && [ "$(readlink -- "${target}" 2>/dev/null)" = "${target}-${version}" ]; then
+          exit 0
+        fi
+        echo "Downloading {{.PKG}}@${version}"
+        rm -f "${target}"
+        GOBIN="{{.LOCALBIN}}" go install "{{.PKG}}@${version}"
+        mv "{{.LOCALBIN}}/$(basename "${target}")" "${target}-${version}"
+        ln -sf "$(realpath "${target}-${version}")" "${target}"
+
+  tools:kustomize:
+    desc: Download kustomize locally if necessary
+    deps: [_localbin]
+    cmds:
+      - task: _install-tool
+        vars:
+          TARGET: '{{.KUSTOMIZE}}'
+          PKG: sigs.k8s.io/kustomize/kustomize/v5
+          VERSION: '{{.KUSTOMIZE_VERSION}}'
+    status:
+      - test -f "{{.KUSTOMIZE}}-{{.KUSTOMIZE_VERSION}}" && test "$(readlink -- "{{.KUSTOMIZE}}" 2>/dev/null)" = "{{.KUSTOMIZE}}-{{.KUSTOMIZE_VERSION}}"
+
+  tools:controller-gen:
+    desc: Download controller-gen locally if necessary
+    deps: [_localbin]
+    cmds:
+      - task: _install-tool
+        vars:
+          TARGET: '{{.CONTROLLER_GEN}}'
+          PKG: sigs.k8s.io/controller-tools/cmd/controller-gen
+          VERSION: '{{.CONTROLLER_TOOLS_VERSION}}'
+    status:
+      - test -f "{{.CONTROLLER_GEN}}-{{.CONTROLLER_TOOLS_VERSION}}" && test "$(readlink -- "{{.CONTROLLER_GEN}}" 2>/dev/null)" = "{{.CONTROLLER_GEN}}-{{.CONTROLLER_TOOLS_VERSION}}"
+
+  tools:envtest:
+    desc: Download setup-envtest locally if necessary
+    deps: [_localbin]
+    cmds:
+      - task: _install-tool
+        vars:
+          TARGET: '{{.ENVTEST}}'
+          PKG: sigs.k8s.io/controller-runtime/tools/setup-envtest
+          VERSION: '{{.ENVTEST_VERSION}}'
+    status:
+      - test -f "{{.ENVTEST}}-{{.ENVTEST_VERSION}}" && test "$(readlink -- "{{.ENVTEST}}" 2>/dev/null)" = "{{.ENVTEST}}-{{.ENVTEST_VERSION}}"
+
+  tools:golangci-lint:
+    desc: Download golangci-lint locally if necessary
+    deps: [_localbin]
+    cmds:
+      - task: _install-tool
+        vars:
+          TARGET: '{{.GOLANGCI_LINT}}'
+          PKG: github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+          VERSION: '{{.GOLANGCI_LINT_VERSION}}'
+      - |
+        if [ -f .custom-gcl.yml ]; then
+          echo "Building custom golangci-lint with plugins..."
+          "{{.GOLANGCI_LINT}}" custom --destination "{{.LOCALBIN}}" --name golangci-lint-custom
+          mv -f "{{.LOCALBIN}}/golangci-lint-custom" "{{.GOLANGCI_LINT}}"
+        fi
+    status:
+      - test -f "{{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}" && test "$(readlink -- "{{.GOLANGCI_LINT}}" 2>/dev/null)" = "{{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}"
+
+  setup-envtest:
+    desc: Download envtest binaries for the target Kubernetes version
+    deps: [tools:envtest]
+    cmds:
+      - |
+        echo "Setting up envtest binaries for Kubernetes version {{.ENVTEST_K8S_VERSION}}..."
+        "{{.ENVTEST}}" use {{.ENVTEST_K8S_VERSION}} --bin-dir "{{.LOCALBIN}}" -p path || {
+          echo "Error: Failed to set up envtest binaries for version {{.ENVTEST_K8S_VERSION}}."
+          exit 1
+        }
+
+  # ── Development ────────────────────────────────────────────────────────
+
+  manifests:
+    desc: Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects
+    deps: [tools:controller-gen]
+    cmds:
+      - '"{{.CONTROLLER_GEN}}" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases'
+    sources:
+      - api/**/*.go
+      - internal/**/*.go
+    generates:
+      - config/crd/bases/*.yaml
+      - config/rbac/role.yaml
+
+  generate:
+    desc: Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations
+    deps: [tools:controller-gen]
+    cmds:
+      - '"{{.CONTROLLER_GEN}}" object:headerFile="hack/boilerplate.go.txt",year={{.YEAR}} paths="./..."'
+    sources:
+      - api/**/*.go
+      - hack/boilerplate.go.txt
+    generates:
+      - api/**/zz_generated.deepcopy.go
+
+  fmt:
+    desc: Run go fmt against code
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet against code
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint linter
+    deps: [tools:golangci-lint]
+    cmds:
+      - '"{{.GOLANGCI_LINT}}" run'
+
+  lint-fix:
+    desc: Run golangci-lint linter and perform fixes
+    deps: [tools:golangci-lint]
+    cmds:
+      - '"{{.GOLANGCI_LINT}}" run --fix'
+
+  lint-config:
+    desc: Verify golangci-lint linter configuration
+    deps: [tools:golangci-lint]
+    cmds:
+      - '"{{.GOLANGCI_LINT}}" config verify'
+
+  # ── Testing ────────────────────────────────────────────────────────────
+
+  test:
+    desc: Run unit tests with coverage
+    deps: [manifests, generate, fmt, vet, setup-envtest]
+    cmds:
+      - |
+        KUBEBUILDER_ASSETS="$("{{.ENVTEST}}" use {{.ENVTEST_K8S_VERSION}} --bin-dir "{{.LOCALBIN}}" -p path)" \
+          go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+
+  test-integration:
+    desc: Run integration tests against a live Concourse instance
+    cmds:
+      - go test -tags integration -count=1 -timeout 120s ./test/integration/ -v
+
+  concourse-up:
+    desc: Start a local Concourse CI instance via docker compose
+    cmds:
+      - docker compose up -d
+      - |
+        echo "Waiting for Concourse to be ready..."
+        timeout 120 bash -c 'until curl -sf http://localhost:8080/api/v1/info >/dev/null; do sleep 2; done'
+        echo "Concourse is ready at http://localhost:8080 (user: test, pass: test)"
+
+  concourse-down:
+    desc: Stop and remove the local Concourse CI instance
+    cmds:
+      - docker compose down -v
+
+  setup-test-e2e:
+    desc: Set up a Kind cluster for e2e tests if it does not exist
+    cmds:
+      - |
+        command -v {{.KIND}} >/dev/null 2>&1 || { echo "Kind is not installed."; exit 1; }
+        case "$({{.KIND}} get clusters)" in
+          *"{{.KIND_CLUSTER}}"*)
+            echo "Kind cluster '{{.KIND_CLUSTER}}' already exists. Skipping creation." ;;
+          *)
+            echo "Creating Kind cluster '{{.KIND_CLUSTER}}'..."
+            {{.KIND}} create cluster --name {{.KIND_CLUSTER}} ;;
+        esac
+
+  test-e2e:
+    desc: Run the e2e tests (expects an isolated environment using Kind)
+    deps: [setup-test-e2e, manifests, generate, fmt, vet]
+    cmds:
+      - KIND={{.KIND}} KIND_CLUSTER={{.KIND_CLUSTER}} go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+      - task: cleanup-test-e2e
+
+  cleanup-test-e2e:
+    desc: Tear down the Kind cluster used for e2e tests
+    cmds:
+      - '{{.KIND}} delete cluster --name {{.KIND_CLUSTER}}'
+
+  # ── Build ──────────────────────────────────────────────────────────────
+
+  build:
+    desc: Build manager binary
+    deps: [manifests, generate, fmt, vet]
+    cmds:
+      - go build -o bin/manager cmd/main.go
+    sources:
+      - cmd/**/*.go
+      - internal/**/*.go
+      - api/**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - bin/manager
+
+  run:
+    desc: Run a controller from your host
+    deps: [manifests, generate, fmt, vet]
+    cmds:
+      - go run ./cmd/main.go
+
+  docker-build:
+    desc: Build docker image with the manager
+    cmds:
+      - '{{.CONTAINER_TOOL}} build -t {{.IMG}} .'
+
+  docker-push:
+    desc: Push docker image with the manager
+    cmds:
+      - '{{.CONTAINER_TOOL}} push {{.IMG}}'
+
+  docker-buildx:
+    desc: Build and push docker image for cross-platform support
+    cmds:
+      - "sed -e '1 s/\\(^FROM\\)/FROM --platform=$${BUILDPLATFORM}/; t' -e ' 1,// s//FROM --platform=$${BUILDPLATFORM}/' Dockerfile > Dockerfile.cross"
+      - '{{.CONTAINER_TOOL}} buildx create --name concourse-operator-builder || true'
+      - '{{.CONTAINER_TOOL}} buildx use concourse-operator-builder'
+      - '{{.CONTAINER_TOOL}} buildx build --push --platform={{.PLATFORMS}} --tag {{.IMG}} -f Dockerfile.cross . || true'
+      - '{{.CONTAINER_TOOL}} buildx rm concourse-operator-builder || true'
+      - rm -f Dockerfile.cross
+
+  build-installer:
+    desc: Generate a consolidated YAML with CRDs and deployment
+    deps: [manifests, generate, tools:kustomize]
+    cmds:
+      - mkdir -p dist
+      - cd config/manager && "{{.KUSTOMIZE}}" edit set image controller={{.IMG}}
+      - '"{{.KUSTOMIZE}}" build config/default > dist/install.yaml'
+
+  # ── Deployment ─────────────────────────────────────────────────────────
+
+  install:
+    desc: Install CRDs into the K8s cluster specified in ~/.kube/config
+    deps: [manifests, tools:kustomize]
+    cmds:
+      - |
+        out="$("{{.KUSTOMIZE}}" build config/crd 2>/dev/null || true)"
+        if [ -n "$out" ]; then
+          echo "$out" | {{.KUBECTL}} apply -f -
+        else
+          echo "No CRDs to install; skipping."
+        fi
+
+  uninstall:
+    desc: Uninstall CRDs from the K8s cluster specified in ~/.kube/config
+    deps: [manifests, tools:kustomize]
+    cmds:
+      - |
+        out="$("{{.KUSTOMIZE}}" build config/crd 2>/dev/null || true)"
+        if [ -n "$out" ]; then
+          echo "$out" | {{.KUBECTL}} delete --ignore-not-found={{.IGNORE_NOT_FOUND}} -f -
+        else
+          echo "No CRDs to delete; skipping."
+        fi
+
+  deploy:
+    desc: Deploy controller to the K8s cluster specified in ~/.kube/config
+    deps: [manifests, tools:kustomize]
+    cmds:
+      - cd config/manager && "{{.KUSTOMIZE}}" edit set image controller={{.IMG}}
+      - '"{{.KUSTOMIZE}}" build config/default | {{.KUBECTL}} apply -f -'
+
+  undeploy:
+    desc: Undeploy controller from the K8s cluster specified in ~/.kube/config
+    deps: [tools:kustomize]
+    cmds:
+      - '"{{.KUSTOMIZE}}" build config/default | {{.KUBECTL}} delete --ignore-not-found={{.IGNORE_NOT_FOUND}} -f -'
