@@ -18,8 +18,10 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -38,9 +41,9 @@ import (
 	concoursev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
 	"github.com/jakobmoellerdev/concourse-operator/internal/controller"
+	"github.com/jakobmoellerdev/concourse-operator/internal/selfregistration"
 	// +kubebuilder:scaffold:imports
 )
-
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
@@ -62,6 +65,10 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var selfRegister bool
+	var selfRegisterName string
+	var selfRegisterType string
+	var selfRegisterHeartbeat time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -80,6 +87,14 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&selfRegister, "self-register", true,
+		"If set, register this operator as a maestro LifecycleManager CR on startup and heartbeat its status.")
+	flag.StringVar(&selfRegisterName, "self-register-name", "",
+		"Override the auto-derived '<namespace>-<serviceaccount>' name of the self-registered LifecycleManager CR.")
+	flag.StringVar(&selfRegisterType, "self-register-type", "concourse",
+		"Value published as spec.type on the self-registered LifecycleManager CR.")
+	flag.DurationVar(&selfRegisterHeartbeat, "self-register-heartbeat", selfregistration.DefaultHeartbeatInterval,
+		"Interval between status.lastHeartbeatTime refreshes on the self-registered LifecycleManager CR.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -228,6 +243,13 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
+	if selfRegister {
+		if err := setupSelfRegistration(mgr, selfRegisterName, selfRegisterType, selfRegisterHeartbeat); err != nil {
+			setupLog.Error(err, "Failed to set up LifecycleManager self-registration")
+			os.Exit(1)
+		}
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")
 		os.Exit(1)
@@ -242,4 +264,51 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// setupSelfRegistration derives the operator's pod identity from the SA
+// mount, builds a maestro LifecycleManager registrar, and hands it to the
+// controller-runtime manager. Running outside a pod is not an error — we
+// simply log a warning and skip, so dev laptops do not have to hand-set
+// flags. Any other identity-derivation error is fatal because it means the
+// mount exists but is malformed, which is worth surfacing loudly.
+func setupSelfRegistration(mgr ctrl.Manager, name, typ string, heartbeat time.Duration) error {
+	identity, err := selfregistration.FromServiceAccountMount()
+	if err != nil {
+		if errors.Is(err, selfregistration.ErrNotInCluster) {
+			setupLog.Info("Skipping LifecycleManager self-registration: not running in a pod")
+			return nil
+		}
+		return err
+	}
+	// Deliberately bypass the manager's caching client: the registrar reads
+	// its own Pod once at Start (a caching client would need list+watch
+	// verbs to build a Pod cache) and touches a single cluster-scoped
+	// LifecycleManager CR every 30 s. Both fit a direct API client cleanly
+	// and keep the RBAC surface tight (get-only on Pods).
+	direct, err := client.New(mgr.GetConfig(), client.Options{
+		Scheme: mgr.GetScheme(),
+		Mapper: mgr.GetRESTMapper(),
+	})
+	if err != nil {
+		return err
+	}
+	reg, err := selfregistration.New(selfregistration.Options{
+		Client:            direct,
+		Identity:          identity,
+		Name:              name,
+		Type:              typ,
+		Scheme:            mgr.GetScheme(),
+		HeartbeatInterval: heartbeat,
+		Log:               ctrl.Log.WithName("selfregistration"),
+	})
+	if err != nil {
+		return err
+	}
+	setupLog.Info("Registering LifecycleManager self-registration runnable",
+		"name", reg.Name(),
+		"type", typ,
+		"supportedResourceTypes", reg.SupportedResourceTypes(),
+	)
+	return mgr.Add(reg)
 }

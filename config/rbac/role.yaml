@@ -14,6 +14,12 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+- apiGroups:
   - concourse-ci.org
   resources:
   - builds
@@ -53,6 +59,25 @@ rules:
   - resources/status
   - teams/status
   - workers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - delivery.maestro.sap.com
+  resources:
+  - lifecyclemanagers
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - delivery.maestro.sap.com
+  resources:
+  - lifecyclemanagers/status
   verbs:
   - get
   - patch
