@@ -25,6 +25,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -404,4 +405,111 @@ func TestRegistrar_ShutdownBestEffortClearsReady(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: r.Name()}, got))
 	ready, _, _ := unstructured.NestedBool(got.Object, "status", "ready")
 	assert.False(t, ready, "shutdown should flip Ready=false best-effort")
+}
+
+// TestRegistrar_ManagedResourcesFromClusterInventory seeds a Pipeline + an
+// Instance CR into the fake client, runs one Start cycle, and asserts the
+// registrar's default ManagedResourcesResolver enumerates them onto the LM
+// CR's status.managedResources + status.managedItems.
+func TestRegistrar_ManagedResourcesFromClusterInventory(t *testing.T) {
+	// Seed one Instance (Ready=True) and one Pipeline. The Instance
+	// contributes to both status.managedResources.instances=1 AND
+	// status.managedItems (with URL + Ready).
+	instance := &concoursev1alpha1.Instance{
+		ObjectMeta: metav1.ObjectMeta{Name: "local-ci", Namespace: "default"},
+		Spec: concoursev1alpha1.InstanceSpec{
+			URL: "https://ci.example.com",
+		},
+		Status: concoursev1alpha1.InstanceStatus{
+			Conditions: []metav1.Condition{
+				{Type: "Ready", Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ok"},
+			},
+		},
+	}
+	pipeline := &concoursev1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "main-build", Namespace: "default"},
+		Spec: concoursev1alpha1.PipelineSpec{
+			TeamRef: concoursev1alpha1.LocalObjectReference{Name: "main"},
+		},
+	}
+	c := newFakeClient(t, instance, pipeline)
+
+	r, err := New(Options{
+		Client:            c,
+		Type:              "concourse",
+		Identity:          testIdentity,
+		HeartbeatInterval: time.Hour,
+		InstanceInfoResolver: func(context.Context) (*InstanceInfo, error) {
+			return nil, nil
+		},
+		Log: logr.Discard(),
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, r.ensureSpec(ctx))
+	require.NoError(t, r.updateStatus(ctx, true))
+
+	got := newLMShell(r.Name())
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: r.Name()}, got))
+
+	counts, ok, err := unstructured.NestedStringMap(got.Object, "status", "managedResources")
+	require.NoError(t, err)
+	require.True(t, ok, "status.managedResources must be populated")
+	assert.Equal(t, "1", counts["instances"], "instances count should be 1")
+	assert.Equal(t, "1", counts["pipelines"], "pipelines count should be 1")
+	assert.Equal(t, "0", counts["teams"], "unseen kinds still report 0 when the list succeeds")
+	assert.Equal(t, "0", counts["builds"])
+	assert.Equal(t, "0", counts["activeBuilds"], "activeBuilds emitted alongside builds")
+
+	items, ok, err := unstructured.NestedSlice(got.Object, "status", "managedItems")
+	require.NoError(t, err)
+	require.True(t, ok, "status.managedItems must be populated")
+	require.Len(t, items, 1)
+	m, _ := items[0].(map[string]any)
+	assert.Equal(t, "Instance", m["kind"], "managedItems[0].Kind should be Instance")
+	assert.Equal(t, "local-ci", m["name"])
+	assert.Equal(t, "default", m["namespace"])
+	assert.Equal(t, "https://ci.example.com", m["url"])
+	assert.Equal(t, true, m["ready"])
+}
+
+// TestRegistrar_ManagedResourcesEmpty proves that a cluster with none of
+// the concourse CRDs installed still successfully self-registers: the
+// resolver returns an empty snapshot and the LM CR's status.managedResources
+// / status.managedItems stay absent (omitempty preserved).
+func TestRegistrar_ManagedResourcesEmpty(t *testing.T) {
+	c := newFakeClient(t)
+	r, err := New(Options{
+		Client:            c,
+		Type:              "concourse",
+		Identity:          testIdentity,
+		HeartbeatInterval: time.Hour,
+		InstanceInfoResolver: func(context.Context) (*InstanceInfo, error) {
+			return nil, nil
+		},
+		Log: logr.Discard(),
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, r.ensureSpec(ctx))
+	require.NoError(t, r.updateStatus(ctx, true))
+
+	got := newLMShell(r.Name())
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: r.Name()}, got))
+
+	// With the fake client scheme registered for every concourse kind, the
+	// resolver returns 0-counts for all kinds — not "no signal". That's the
+	// intended behaviour: a reachable CRD with 0 CRs is different from a
+	// missing CRD.
+	counts, ok, err := unstructured.NestedStringMap(got.Object, "status", "managedResources")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "0", counts["pipelines"])
+	_, ok, err = unstructured.NestedSlice(got.Object, "status", "managedItems")
+	require.NoError(t, err)
+	assert.False(t, ok, "empty Instance list should NOT stamp status.managedItems")
 }

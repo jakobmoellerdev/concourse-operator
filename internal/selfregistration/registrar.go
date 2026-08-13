@@ -91,6 +91,13 @@ type Options struct {
 	// the InstanceInfo. Defaults to reading the Downward API env + querying
 	// the pod. Overridable for tests.
 	InstanceInfoResolver InstanceInfoResolver
+	// ManagedResourcesResolver, if non-nil, is called every heartbeat tick
+	// to compute status.managedResources + status.managedItems on the LM
+	// CR. Defaults to DefaultManagedResourcesResolver(Options.Client, ...)
+	// which enumerates every concourse-ci.org/v1alpha1 CRD via unstructured.
+	// Nil-safe: a nil resolver leaves both status fields untouched every
+	// tick, preserving whatever the API server has (never clobbers).
+	ManagedResourcesResolver ManagedResourcesResolver
 	// Log is the logger used for lifecycle events. Defaults to a discard logger.
 	Log logr.Logger
 	// now overrides time.Now for tests. Nil means real time.
@@ -108,6 +115,7 @@ type Registrar struct {
 	supportedResourceTypes []string
 	interval               time.Duration
 	resolver               InstanceInfoResolver
+	managedResolver        ManagedResourcesResolver
 	instanceOnce           *InstanceInfo
 	log                    logr.Logger
 	now                    func() time.Time
@@ -222,6 +230,16 @@ func New(opts Options) (*Registrar, error) {
 		resolver = DefaultInstanceInfoResolver(opts.Client, opts.Identity, now(), log)
 	}
 
+	// ManagedResourcesResolver defaults are opt-in-by-nil: an explicit nil
+	// on the Options struct leaves the fields untouched on every tick, so
+	// callers who don't care about managed resources can still exercise
+	// the registrar without a bespoke resolver. Anything else uses the
+	// list-all-concourse-CRDs default.
+	managedResolver := opts.ManagedResourcesResolver
+	if managedResolver == nil {
+		managedResolver = DefaultManagedResourcesResolver(opts.Client, log)
+	}
+
 	return &Registrar{
 		client:                 opts.Client,
 		name:                   name,
@@ -230,6 +248,7 @@ func New(opts Options) (*Registrar, error) {
 		supportedResourceTypes: append([]string(nil), resourceTypes...),
 		interval:               interval,
 		resolver:               resolver,
+		managedResolver:        managedResolver,
 		log:                    log,
 		now:                    now,
 	}, nil
@@ -349,9 +368,13 @@ func (r *Registrar) ensureSpec(ctx context.Context) error {
 	return nil
 }
 
-// updateStatus patches only status.ready, status.lastHeartbeatTime, and
-// status.instance via the status subresource. Uses a MergeFrom patch so
-// concurrent replicas coalesce.
+// updateStatus patches only status.ready, status.lastHeartbeatTime,
+// status.instance, status.managedResources, and status.managedItems via
+// the status subresource. Uses a MergeFrom patch so concurrent replicas
+// coalesce. The InstanceInfo and managed-resources snapshots are read
+// through their respective resolvers; empty snapshots leave the
+// corresponding fields untouched so a transient list failure does not
+// clobber a previously-published set.
 func (r *Registrar) updateStatus(ctx context.Context, ready bool) error {
 	current := newLifecycleManager()
 	if err := r.client.Get(ctx, client.ObjectKey{Name: r.name}, current); err != nil {
@@ -373,6 +396,33 @@ func (r *Registrar) updateStatus(ctx context.Context, ready bool) error {
 	if r.instanceOnce != nil {
 		status["instance"] = instanceInfoToMap(r.instanceOnce)
 	}
+
+	// Managed resources: recompute per tick. A resolver error (or an empty
+	// snapshot) leaves the previous status.managedResources /
+	// status.managedItems untouched — preserving whatever the API server
+	// currently holds instead of blanking it. When we DO get a snapshot,
+	// unconditionally overwrite so counts stay fresh (including going back
+	// to zero when a user deletes every CR).
+	if r.managedResolver != nil {
+		counts, items, mErr := r.managedResolver(ctx)
+		if mErr != nil {
+			r.log.V(1).Info("managed-resources resolver failed; keeping previous status",
+				"err", mErr.Error())
+		}
+		if mErr == nil {
+			if cm := managedResourcesToUnstructured(counts); cm != nil {
+				status["managedResources"] = cm
+			} else {
+				delete(status, "managedResources")
+			}
+			if mi := managedItemsToUnstructured(items); mi != nil {
+				status["managedItems"] = mi
+			} else {
+				delete(status, "managedItems")
+			}
+		}
+	}
+
 	current.Object["status"] = status
 
 	if err := r.client.Status().Patch(ctx, current, client.MergeFrom(base),
