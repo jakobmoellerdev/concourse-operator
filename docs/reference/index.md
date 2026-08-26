@@ -6,28 +6,33 @@ The full reference is auto-generated from Go source via [crd-ref-docs](https://g
 
 ## Resources
 
-| Kind | Purpose | Parent ref |
-|------|---------|-----------|
-| [Instance](api.md#instance) | Connection to a Concourse server | — (root) |
-| [Team](api.md#team) | Concourse team + RBAC roles | `instanceRef` |
-| [Pipeline](api.md#pipeline) | Pipeline configuration | `teamRef` |
-| [Job](api.md#job) | Job pause state + build trigger | `pipelineRef` |
-| [Build](api.md#build) | Build tracking and abort | `jobRef` |
-| [Resource](api.md#resource) | Resource pin + check interval | `pipelineRef` |
-| [Worker](api.md#worker) | Worker lifecycle management | `instanceRef` |
+| Kind | Short names | Purpose | Parent ref |
+| ------ | ------------- | --------- | ----------- |
+| [Instance](api.md#instance) | `cci`, `concinst` | Connection to a Concourse server | — (root) |
+| [Team](api.md#team) | `cct` | Concourse team + RBAC roles | `instanceRef` |
+| [Pipeline](api.md#pipeline) | `ccp` | Pipeline configuration (`inline` or `configMapRef`) | `teamRef` |
+| [Job](api.md#job) | `ccj` | Job pause state; create a Build CR to trigger | `pipelineRef` |
+| [Build](api.md#build) | `ccb` | Build tracking, adopt (`buildID`), cancel | `jobRef` |
+| [Resource](api.md#resource) | `ccr` | Pipeline resource projection (pin + check) | `pipelineRef` |
+| [Worker](api.md#worker) | `ccw` | Worker lifecycle (`Running` / `Draining` / `Removed`) | `instanceRef` |
 
 ## Common field types
 
 | Type | Description |
-|------|-------------|
-| [LocalObjectReference](api.md#localobjectreference) | References a resource in the same namespace |
+| ------ | ------------- |
+| [LocalObjectReference](api.md#localobjectreference) | References a resource by `name` and optional `namespace` |
 | [SecretKeySelector](api.md#secretkeyselector) | Points at a key inside a Kubernetes `Secret` |
+| [ConfigMapKeyRef](api.md#configmapkeyref) | Points at a key inside a Kubernetes `ConfigMap` |
+| [ReclaimPolicy](api.md#reclaimpolicy) | `Delete` or `Orphan` (Team / Pipeline) |
+
+Cross-namespace `LocalObjectReference` values are allowed only when `Instance.spec.allowedNamespaces` includes the child's namespace (or `"*"`).
 
 ## kubectl quick reference
 
 ```bash
-# List all operator resources
+# List all operator resources (kinds or short names)
 kubectl get instance,team,pipeline,job,build,resource,worker
+kubectl get cci,cct,ccp,ccj,ccb,ccr,ccw
 
 # Describe a resource (shows events and conditions)
 kubectl describe pipeline my-pipeline

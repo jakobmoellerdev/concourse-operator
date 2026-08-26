@@ -120,7 +120,7 @@ var _ = Describe("Job Controller", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		})
 
-		It("should create a Build CR when TriggerBuild=true and chain is ready", func() {
+		It("should not create a Build CR just because the job is ready", func() {
 			By("Setting up a ready instance/team/pipeline chain")
 			inst := makeReadyInstance(ctx, "job-trigger-instance")
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
@@ -129,13 +129,12 @@ var _ = Describe("Job Controller", func() {
 			pipeline := makeReadyPipeline(ctx, "job-trigger-pipeline", "job-trigger-team")
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
 
-			By("Creating a job with TriggerBuild=true")
+			By("Creating a job without creating a Build CR")
 			triggerJob := &concoursev1alpha1.Job{
 				ObjectMeta: metav1.ObjectMeta{Name: "job-with-trigger", Namespace: "default"},
 				Spec: concoursev1alpha1.JobSpec{
-					PipelineRef:  concoursev1alpha1.LocalObjectReference{Name: "job-trigger-pipeline"},
-					JobName:      "build",
-					TriggerBuild: true,
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: "job-trigger-pipeline"},
+					JobName:     "build",
 				},
 			}
 			Expect(k8sClient.Create(ctx, triggerJob)).To(Succeed())
@@ -159,20 +158,17 @@ var _ = Describe("Job Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Verifying a Build CR was created")
+			By("Verifying no Build CR was created; trigger is now creating a Build")
 			buildList := &concoursev1alpha1.BuildList{}
 			Expect(k8sClient.List(ctx, buildList)).To(Succeed())
-			found := false
 			for _, b := range buildList.Items {
-				if b.Spec.JobRef != nil && b.Spec.JobRef.Name == "job-with-trigger" {
-					found = true
-					break
+				if b.Spec.JobRef != nil {
+					Expect(b.Spec.JobRef.Name).NotTo(Equal("job-with-trigger"))
 				}
 			}
-			Expect(found).To(BeTrue(), "expected a Build CR referencing job-with-trigger")
 		})
 
-		It("should NOT create a Build CR when TriggerBuild=false", func() {
+		It("should NOT create a Build CR when none is applied", func() {
 			By("Setting up a ready instance/team/pipeline chain")
 			inst := makeReadyInstance(ctx, "job-notrigger-instance")
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
@@ -181,13 +177,12 @@ var _ = Describe("Job Controller", func() {
 			pipeline := makeReadyPipeline(ctx, "job-notrigger-pipeline", "job-notrigger-team")
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
 
-			By("Creating a job with TriggerBuild=false")
+			By("Creating a job without a Build")
 			noTriggerJob := &concoursev1alpha1.Job{
 				ObjectMeta: metav1.ObjectMeta{Name: "job-without-trigger", Namespace: "default"},
 				Spec: concoursev1alpha1.JobSpec{
-					PipelineRef:  concoursev1alpha1.LocalObjectReference{Name: "job-notrigger-pipeline"},
-					JobName:      "build",
-					TriggerBuild: false,
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: "job-notrigger-pipeline"},
+					JobName:     "build",
 				},
 			}
 			Expect(k8sClient.Create(ctx, noTriggerJob)).To(Succeed())
@@ -238,9 +233,8 @@ var _ = Describe("Job Controller", func() {
 			triggerJob := &concoursev1alpha1.Job{
 				ObjectMeta: metav1.ObjectMeta{Name: "job-idempotent", Namespace: "default"},
 				Spec: concoursev1alpha1.JobSpec{
-					PipelineRef:  concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
-					JobName:      "deploy",
-					TriggerBuild: true,
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					JobName:     "deploy",
 				},
 			}
 			Expect(k8sClient.Create(ctx, triggerJob)).To(Succeed())
@@ -260,33 +254,19 @@ var _ = Describe("Job Controller", func() {
 			}
 			nsn := types.NamespacedName{Name: "job-idempotent", Namespace: "default"}
 
-			By("First reconcile creates a build (Generation=1, ObservedGeneration=0)")
+			By("Reconciles do not create Builds; users create Build CRs to trigger")
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
 			Expect(err).NotTo(HaveOccurred())
-
-			buildListAfterFirst := &concoursev1alpha1.BuildList{}
-			Expect(k8sClient.List(ctx, buildListAfterFirst)).To(Succeed())
-			countAfterFirst := 0
-			for _, b := range buildListAfterFirst.Items {
-				if b.Spec.JobRef != nil && b.Spec.JobRef.Name == "job-idempotent" {
-					countAfterFirst++
-				}
-			}
-			Expect(countAfterFirst).To(Equal(1), "expected exactly 1 build after first reconcile")
-
-			By("Second reconcile with same generation should NOT create another build")
 			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
 			Expect(err).NotTo(HaveOccurred())
 
-			buildListAfterSecond := &concoursev1alpha1.BuildList{}
-			Expect(k8sClient.List(ctx, buildListAfterSecond)).To(Succeed())
-			countAfterSecond := 0
-			for _, b := range buildListAfterSecond.Items {
-				if b.Spec.JobRef != nil && b.Spec.JobRef.Name == "job-idempotent" {
-					countAfterSecond++
+			buildList := &concoursev1alpha1.BuildList{}
+			Expect(k8sClient.List(ctx, buildList)).To(Succeed())
+			for _, b := range buildList.Items {
+				if b.Spec.JobRef != nil {
+					Expect(b.Spec.JobRef.Name).NotTo(Equal("job-idempotent"))
 				}
 			}
-			Expect(countAfterSecond).To(Equal(1), "second reconcile should not create a duplicate build")
 		})
 
 		It("should call PauseJob when spec.paused=true and set status.Paused=true", func() {
@@ -298,6 +278,9 @@ var _ = Describe("Job Controller", func() {
 					pauseJobFn: func(_ atc.PipelineRef, _ string) (bool, error) {
 						pauseCalled = true
 						return true, nil
+					},
+					jobFn: func(_ atc.PipelineRef, name string) (atc.Job, bool, error) {
+						return atc.Job{Name: name, Paused: true}, true, nil
 					},
 				},
 				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
@@ -333,7 +316,8 @@ var _ = Describe("Job Controller", func() {
 
 			fetched := &concoursev1alpha1.Job{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
-			Expect(fetched.Status.Paused).To(BeTrue())
+			Expect(fetched.Status.Paused).NotTo(BeNil())
+			Expect(*fetched.Status.Paused).To(BeTrue())
 			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -383,7 +367,8 @@ var _ = Describe("Job Controller", func() {
 
 			fetched := &concoursev1alpha1.Job{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
-			Expect(fetched.Status.Paused).To(BeFalse())
+			Expect(fetched.Status.Paused).NotTo(BeNil())
+			Expect(*fetched.Status.Paused).To(BeFalse())
 		})
 	})
 })

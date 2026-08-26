@@ -69,15 +69,21 @@ A thread-safe cache of `concourse.Client` instances. See [Client Cache](client-c
 
 ### Auth helpers (`internal/concourse/auth.go`)
 
-Builds `http.Client` values with basic auth, bearer token auth, and optional custom CA / `insecureSkipVerify`. Reads credentials from Kubernetes `Secret` objects.
+Builds `http.Client` values with an OAuth2 password grant (`spec.auth.password`), bearer token auth (`spec.auth.token`), and optional custom CA / `insecureSkipVerify`. Reads credentials from Kubernetes `Secret` objects. Auth Secrets are watched so rotation does not require annotating the Instance.
 
 ## Status conditions
 
 All seven resource types expose a `conditions` array following the standard `metav1.Condition` schema:
 
 | Condition type | Meaning |
-|----------------|---------|
+| ---------------- | --------- |
 | `Ready` | Reconciliation succeeded; resource is in sync with Concourse |
-| `Authenticated` | (Instance only) Connection and credentials verified |
+| `Authenticated` | (Instance) Connection and credentials verified |
+| `WorkersHealthy` | (Instance) No workers in the stalled state |
+| `ConfigSynced` / `ConfigWarning` | (Pipeline / Team) Last config apply result |
+| `LastBuildSucceeded` | (Job) Most recent finished build succeeded |
+| `CheckHealthy` | (Resource) Last resource check succeeded |
+| `Complete` | (Build) Build reached a terminal state |
+| `Stalled` / `StateTransitioning` | (Worker) Observed / desired lifecycle |
 
 Conditions use `observedGeneration` to distinguish stale observations from current ones.

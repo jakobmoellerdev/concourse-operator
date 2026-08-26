@@ -18,15 +18,15 @@ A Kubernetes operator that manages [Concourse CI](https://concourse-ci.org) reso
 
 **7 CRDs:**
 
-| Resource | Purpose |
-|---|---|
-| `Instance` | Connection + auth to a Concourse server |
-| `Team` | Team management with role bindings |
-| `Pipeline` | Pipeline configuration (inline or ConfigMap-sourced) |
-| `Job` | Job pause/unpause and build triggering |
-| `Build` | Build lifecycle tracking and abort control |
-| `Resource` | Resource version pinning and check intervals |
-| `Worker` | Worker lifecycle management (active/land/retire/prune) |
+| Resource | Short names | Purpose |
+| --- | --- | --- |
+| `Instance` | `cci`, `concinst` | Connection + auth to a Concourse server |
+| `Team` | `cct` | Team management with role bindings |
+| `Pipeline` | `ccp` | Pipeline configuration (inline or ConfigMap-sourced) |
+| `Job` | `ccj` | Job pause/unpause (create a `Build` CR to trigger) |
+| `Build` | `ccb` | Build lifecycle tracking, adopt, and cancel |
+| `Resource` | `ccr` | Projection of a pipeline resource (pin + check) |
+| `Worker` | `ccw` | Worker lifecycle (`Running` / `Draining` / `Removed`) |
 
 ## Architecture
 
@@ -45,7 +45,7 @@ flowchart LR
             CW["Worker"]
         end
         cache[("thread-safe\nclient cache")]
-        goClient["go-concourse Client\nBasicAuth · Token · TLS"]
+        goClient["go-concourse Client\nPassword · Token · TLS"]
     end
     ciServer(["Concourse CI Server\n(external)"])
 
@@ -63,19 +63,19 @@ flowchart LR
 
 ### Component Details
 
-**Instance** is the root resource. It holds the Concourse server URL, authentication credentials, and TLS configuration. The operator builds an authenticated HTTP client and stores it in a thread-safe cache keyed by `namespace/name@resourceVersion`. When credentials change the cache is evicted and a fresh client is built.
+**Instance** is the root resource. It holds the Concourse server URL, authentication credentials, TLS configuration, and `allowedNamespaces` for cross-namespace refs. The operator builds an authenticated HTTP client and stores it in a thread-safe cache. Secrets used for auth and TLS are watched — rotating a credential Secret evicts the cached client automatically.
 
-**Team** references a `Instance` and manages a team in Concourse including role bindings (owner, member, pipeline-operator, viewer). The operator creates the team if it does not exist and reconciles role assignments.
+**Team** references an `Instance` and manages a team in Concourse including role bindings (owner, member, pipeline-operator, viewer). `teamName` and `instanceRef` are immutable. Deleting a Team CR deletes the Concourse team unless `reclaimPolicy: Orphan`. Destroying the reserved `main` team also requires `allowDestroy: true`.
 
-**Pipeline** references a `Team` and manages a pipeline configuration. The operator SHA256-hashes the pipeline YAML to detect config drift and only applies changes when necessary. Pipelines can be paused or exposed via the spec.
+**Pipeline** references a `Team` and manages a pipeline configuration (`config.inline` or `config.configMapRef`, exactly one). The operator SHA256-hashes the pipeline YAML to detect config drift and only applies changes when necessary. Pipelines can be paused or exposed via the spec. Deleting a Pipeline CR deletes the Concourse pipeline unless `reclaimPolicy: Orphan`.
 
-**Job** references a `Pipeline` and controls job state (pause/unpause). Setting `triggerBuild: true` triggers a new build.
+**Job** references a `Pipeline` and controls job state (pause/unpause). Create a `Build` CR to trigger a new build. History limits (`successfulBuildsHistoryLimit` / `failedBuildsHistoryLimit`, default 3) prune old Build CRs.
 
-**Build** references a `Job` (or sets `oneOff: true` for standalone builds). The operator tracks the full build lifecycle: `pending → started → succeeded / failed / errored / aborted`. Setting `abort: true` aborts a running build.
+**Build** references a `Job` (`jobRef` is required). Creating a Build with no `buildID` triggers a new Concourse build once; setting `buildID` adopts an existing one. The operator tracks the full build lifecycle: `pending → started → succeeded / failed / errored / aborted`. Set `canceled: true` to abort a running build.
 
-**Resource** references a `Pipeline` and manages resource version pinning and check intervals.
+**Resource** is a projection of a named pipeline resource. It does not define the Concourse resource (type/source live in the Pipeline config). Set `pinnedVersion` to pin; clear it to unpin. Optional `checkInterval` triggers operator-driven checks.
 
-**Worker** references a `Instance` and manages worker lifecycle. Set `desiredState` to `active`, `land`, `retire`, or `prune`.
+**Worker** references an `Instance` and manages worker lifecycle via `spec.lifecycle`: `Running` (default, leave in the pool), `Draining` (land / graceful drain), or `Removed` (prune). `workerName` defaults to `metadata.name`.
 
 ### Dependency Chain
 
@@ -119,17 +119,17 @@ stringData:
 apiVersion: concourse-ci.org/v1alpha1
 kind: Instance
 metadata:
-  name: concourseinstance-sample
+  name: instance-sample
   namespace: default
 spec:
   url: http://localhost:8080
   auth:
-    basicAuth:
+    password:
       username: test
       passwordRef:
         name: concourse-local-credentials
         key: password
-  interval: 5m
+  healthProbeInterval: 5m
 ```
 
 **Token-based auth** (alternative):
@@ -138,19 +138,18 @@ spec:
 spec:
   url: https://ci.example.com
   auth:
-    tokenAuth:
+    token:
       tokenRef:
         name: concourse-token-secret
         key: token
 ```
 
-**Custom TLS** (optional):
+**Custom TLS** (optional). `caRef` and `insecureSkipVerify` are mutually exclusive:
 
 ```yaml
 spec:
   tls:
-    insecureSkipVerify: false
-    caSecretRef:
+    caRef:
       name: concourse-ca-cert
       key: ca.crt
 ```
@@ -158,7 +157,7 @@ spec:
 Check status after applying:
 
 ```sh
-kubectl get concourseinstance concourseinstance-sample \
+kubectl get instance instance-sample \
   -o jsonpath='{.status.conditions}'
 ```
 
@@ -168,12 +167,14 @@ kubectl get concourseinstance concourseinstance-sample \
 apiVersion: concourse-ci.org/v1alpha1
 kind: Team
 metadata:
-  name: concourseteam-sample
+  name: team-sample
   namespace: default
 spec:
   instanceRef:
-    name: concourseinstance-sample
+    name: instance-sample
   teamName: main
+  allowDestroy: false
+  reclaimPolicy: Delete
   roles:
     - role: owner
       users:
@@ -188,14 +189,15 @@ spec:
 apiVersion: concourse-ci.org/v1alpha1
 kind: Pipeline
 metadata:
-  name: concoursepipeline-sample
+  name: pipeline-sample
   namespace: default
 spec:
   teamRef:
-    name: concourseteam-sample
+    name: team-sample
   pipelineName: hello-world
   paused: false
   exposed: false
+  reclaimPolicy: Delete
   config:
     inline: |
       jobs:
@@ -212,12 +214,12 @@ spec:
                   args: ["Hello, world!"]
 ```
 
-**ConfigMap-sourced config** (for larger pipelines):
+**ConfigMap-sourced config** (for larger pipelines; exactly one of `inline` or `configMapRef`):
 
 ```yaml
 spec:
   teamRef:
-    name: concourseteam-sample
+    name: team-sample
   pipelineName: my-pipeline
   config:
     configMapRef:
@@ -227,7 +229,7 @@ spec:
 
 The operator detects config changes via SHA256 hash — updating the ConfigMap triggers a reconcile.
 
-**Pipeline variables:**
+**Pipeline variables** (exactly one of `value` or `valueFrom` per var):
 
 ```yaml
 spec:
@@ -235,7 +237,7 @@ spec:
     - name: git-branch
       value: main
     - name: deploy-key
-      secretRef:
+      valueFrom:
         name: deploy-secrets
         key: ssh-private-key
 ```
@@ -246,15 +248,16 @@ spec:
 apiVersion: concourse-ci.org/v1alpha1
 kind: Job
 metadata:
-  name: concoursejob-sample
+  name: job-sample
   namespace: default
 spec:
   pipelineRef:
-    name: concoursepipeline-sample
+    name: pipeline-sample
   jobName: hello
   paused: false
-  triggerBuild: false   # set true to trigger a build on next reconcile
 ```
+
+To trigger a build, create a `Build` CR (there is no `triggerBuild` field on Job).
 
 ### 6. Track Builds — Build
 
@@ -262,18 +265,18 @@ spec:
 apiVersion: concourse-ci.org/v1alpha1
 kind: Build
 metadata:
-  name: concoursebuild-sample
+  name: build-sample
   namespace: default
 spec:
   jobRef:
-    name: concoursejob-sample
-  abort: false   # set true to abort a running build
+    name: job-sample
+  canceled: false   # set true to abort a running build
 ```
 
 Check build status:
 
 ```sh
-kubectl get concoursebuild concoursebuild-sample \
+kubectl get build build-sample \
   -o jsonpath='{.status.concourseStatus}'
 ```
 
@@ -283,14 +286,16 @@ kubectl get concoursebuild concoursebuild-sample \
 apiVersion: concourse-ci.org/v1alpha1
 kind: Resource
 metadata:
-  name: concourseresource-sample
+  name: resource-sample
   namespace: default
 spec:
   pipelineRef:
-    name: concoursepipeline-sample
+    name: pipeline-sample
   resourceName: my-repo
   checkInterval: 5m
 ```
+
+To pin, set `spec.pinnedVersion` to the version map (for example `{ref: abc123}`).
 
 ### 8. Manage Workers — Worker
 
@@ -298,13 +303,13 @@ spec:
 apiVersion: concourse-ci.org/v1alpha1
 kind: Worker
 metadata:
-  name: concourseworker-sample
+  name: worker-sample
   namespace: default
 spec:
   instanceRef:
-    name: concourseinstance-sample
+    name: instance-sample
   workerName: worker-1
-  desiredState: active   # active | land | retire | prune
+  lifecycle: Running   # Running | Draining | Removed
 ```
 
 ### Apply all samples at once
@@ -316,6 +321,7 @@ kubectl apply -k config/samples/
 ## Getting Started
 
 ### Prerequisites
+
 - go version v1.24.6+
 - docker version 17.03+.
 - kubectl version v1.11.3+.
@@ -323,6 +329,7 @@ kubectl apply -k config/samples/
 - Access to a running Concourse CI instance (v8.2.1+).
 
 ### To Deploy on the cluster
+
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
@@ -358,6 +365,7 @@ kubectl apply -k config/samples/
 >**NOTE**: Ensure that the samples has default values to test it out.
 
 ### To Uninstall
+
 **Delete the instances (CRs) from the cluster:**
 
 ```sh
@@ -393,7 +401,7 @@ file in the dist directory. This file contains all the resources built
 with Kustomize, which are necessary to install this project without its
 dependencies.
 
-2. Using the installer
+1. Using the installer
 
 Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
 the project, i.e.:
@@ -410,7 +418,7 @@ kubectl apply -f https://raw.githubusercontent.com/<org>/concourse-operator/<tag
 kubebuilder edit --plugins=helm/v2-alpha
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
+1. See that a chart was generated under 'dist/chart', and users
 can obtain this solution from there.
 
 **NOTE:** If you change the project, you need to update the Helm Chart

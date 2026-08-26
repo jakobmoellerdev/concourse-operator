@@ -8,9 +8,13 @@ metadata:
 spec:
   group: concourse-ci.org
   names:
+    categories:
+    - concourse
     kind: Team
     listKind: TeamList
     plural: teams
+    shortNames:
+    - cct
     singular: team
   scope: Namespaced
   versions:
@@ -18,12 +22,24 @@ spec:
     - jsonPath: .spec.instanceRef.name
       name: Instance
       type: string
-    - jsonPath: .spec.teamName
+    - jsonPath: .status.resolvedName
       name: Team
       type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
+    - jsonPath: .status.teamID
+      name: ID
+      priority: 1
+      type: integer
+    - jsonPath: .status.webURL
+      name: WebURL
+      priority: 1
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspended
+      priority: 1
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -52,15 +68,36 @@ spec:
           spec:
             description: TeamSpec defines the desired state of Team.
             properties:
+              allowDestroy:
+                description: |-
+                  AllowDestroy permits deleting the reserved Concourse "main" team.
+                  Defaults to false. Destroying main is almost always a mistake.
+                type: boolean
               instanceRef:
                 description: InstanceRef references the Instance this team belongs
                   to.
                 properties:
                   name:
+                    description: Name of the referent.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the referent. Empty means the same namespace
+                      as the referring object.
+                    minLength: 1
                     type: string
                 required:
                 - name
                 type: object
+              reclaimPolicy:
+                default: Delete
+                description: |-
+                  ReclaimPolicy controls whether the Concourse team is deleted when this
+                  CR is removed. Defaults to Delete.
+                enum:
+                - Delete
+                - Orphan
+                type: string
               roles:
                 description: Roles defines auth role bindings for the team.
                 items:
@@ -72,6 +109,7 @@ spec:
                       items:
                         type: string
                       type: array
+                      x-kubernetes-list-type: set
                     role:
                       description: Role is the Concourse role name (owner, member,
                         pipeline-operator, viewer).
@@ -86,16 +124,37 @@ spec:
                       items:
                         type: string
                       type: array
+                      x-kubernetes-list-type: set
                   required:
                   - role
                   type: object
+                  x-kubernetes-validations:
+                  - message: each role must have at least one user or group
+                    rule: size(self.users) > 0 || size(self.groups) > 0
                 type: array
+                x-kubernetes-list-map-keys:
+                - role
+                x-kubernetes-list-type: map
+              suspend:
+                default: false
+                description: |-
+                  Suspend stops all reconciliation activity on this Team.
+                  Existing Concourse state is left untouched.
+                type: boolean
               teamName:
                 description: TeamName is the team name in Concourse. Defaults to metadata.name.
+                maxLength: 100
+                minLength: 1
+                pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
                 type: string
             required:
             - instanceRef
             type: object
+            x-kubernetes-validations:
+            - message: teamName is immutable
+              rule: '!has(oldSelf.teamName) || self.teamName == oldSelf.teamName'
+            - message: instanceRef is immutable
+              rule: self.instanceRef == oldSelf.instanceRef
           status:
             description: TeamStatus defines the observed state of Team.
             properties:
@@ -166,9 +225,17 @@ spec:
                 description: ObservedGeneration is the last generation that was reconciled.
                 format: int64
                 type: integer
+              resolvedName:
+                description: ResolvedName is the Concourse team name after defaulting.
+                type: string
               teamID:
                 description: TeamID is the Concourse-assigned numeric team ID.
+                format: int32
                 type: integer
+              webURL:
+                description: WebURL is the Concourse UI URL for this team.
+                format: uri
+                type: string
             type: object
         required:
         - spec

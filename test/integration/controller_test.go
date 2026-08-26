@@ -1,3 +1,5 @@
+//go:build integration
+
 /*
 Copyright 2026.
 
@@ -13,8 +15,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-
-//go:build integration
 
 package integration_test
 
@@ -77,10 +77,22 @@ func findEnvtestBinaries() string {
 // seedInstance creates an Instance CR, marks it Ready, and seeds the cache
 // with the live concourseClient so controllers authenticate via the running
 // Concourse rather than making a fresh HTTP auth attempt.
+func integInstanceSpec() concoursev1alpha1.InstanceSpec {
+	return concoursev1alpha1.InstanceSpec{
+		URL: concourseURL,
+		Auth: concoursev1alpha1.InstanceAuth{
+			Password: &concoursev1alpha1.PasswordGrant{
+				Username:    concourseUser,
+				PasswordRef: concoursev1alpha1.SecretKeySelector{Name: "concourse-local-credentials", Key: "password"},
+			},
+		},
+	}
+}
+
 func seedInstance(ctx context.Context, k8s client.Client, cache *concourse.Cache, name string) *concoursev1alpha1.Instance {
 	inst := &concoursev1alpha1.Instance{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       concoursev1alpha1.InstanceSpec{URL: concourseURL},
+		Spec:       integInstanceSpec(),
 	}
 	Expect(k8s.Create(ctx, inst)).To(Succeed())
 	inst.Status.Conditions = []metav1.Condition{{
@@ -177,19 +189,21 @@ const minimalJobPipeline = `jobs:
         args: ["Hello from operator test"]
 `
 
-var _ = Describe("Controller Integration", func() {
+var _ = Describe("Controller Integration", Ordered, func() {
 	var (
-		ctx  context.Context
-		k8s  client.Client
-		stop func()
+		ctx context.Context
+		k8s client.Client
 	)
+
+	BeforeAll(func() {
+		var stop func()
+		k8s, stop = newEnvClient()
+		DeferCleanup(stop)
+	})
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		k8s, stop = newEnvClient()
 	})
-
-	AfterEach(func() { stop() })
 
 	// -----------------------------------------------------------------------
 	Describe("InstanceReconciler", func() {
@@ -201,7 +215,7 @@ var _ = Describe("Controller Integration", func() {
 
 			inst := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "ci-inst", Namespace: "default"},
-				Spec:       concoursev1alpha1.InstanceSpec{URL: concourseURL},
+				Spec:       integInstanceSpec(),
 			}
 			Expect(k8s.Create(ctx, inst)).To(Succeed())
 			DeferCleanup(func() {
@@ -232,7 +246,8 @@ var _ = Describe("Controller Integration", func() {
 			fetched := &concoursev1alpha1.Instance{}
 			Expect(k8s.Get(ctx, nsn, fetched)).To(Succeed())
 			Expect(fetched.Status.Version).NotTo(BeEmpty())
-			Expect(fetched.Status.WorkerCount).To(BeNumerically(">=", 1))
+			Expect(fetched.Status.WorkerCount).NotTo(BeNil())
+			Expect(*fetched.Status.WorkerCount).To(BeNumerically(">=", 1))
 			cond := k8smeta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -282,7 +297,8 @@ var _ = Describe("Controller Integration", func() {
 
 			fetched := &concoursev1alpha1.Team{}
 			Expect(k8s.Get(ctx, teamNSN, fetched)).To(Succeed())
-			Expect(fetched.Status.TeamID).To(BeNumerically(">", 0))
+			Expect(fetched.Status.TeamID).NotTo(BeNil())
+			Expect(*fetched.Status.TeamID).To(BeNumerically(">", 0))
 			cond := k8smeta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -327,7 +343,8 @@ var _ = Describe("Controller Integration", func() {
 
 			fetched := &concoursev1alpha1.Team{}
 			Expect(k8s.Get(ctx, teamNSN, fetched)).To(Succeed())
-			Expect(fetched.Status.TeamID).To(BeNumerically(">", 0))
+			Expect(fetched.Status.TeamID).NotTo(BeNil())
+			Expect(*fetched.Status.TeamID).To(BeNumerically(">", 0))
 
 			By("Deleting the CR triggers finalization → DestroyTeam in Concourse")
 			Expect(k8s.Delete(ctx, fetched)).To(Succeed())
@@ -351,22 +368,29 @@ var _ = Describe("Controller Integration", func() {
 			inst     *concoursev1alpha1.Instance
 			instName string
 			teamName string
+			specSeq  int
 		)
 
 		BeforeEach(func() {
 			cache = concourse.NewCache()
-			// Use Ginkgo node index to avoid name collisions when running
-			// multiple parallel processes.
-			instName = fmt.Sprintf("ci-pl-inst-%d", GinkgoParallelProcess())
-			teamName = fmt.Sprintf("ctrl-integ-pl-team-%d", GinkgoParallelProcess())
+			specSeq++
+			instName = fmt.Sprintf("ci-pl-inst-%d-%d", GinkgoParallelProcess(), specSeq)
+			teamName = fmt.Sprintf("ctrl-integ-pl-team-%d-%d", GinkgoParallelProcess(), specSeq)
 
 			inst = seedInstance(ctx, k8s, cache, instName)
-			_ = makeReadyTeamCR(ctx, k8s, teamName, instName)
+			teamCR := makeReadyTeamCR(ctx, k8s, teamName, instName)
 			reconcileTeam(ctx, k8s, cache, teamName)
 
 			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Team{}
+				if err := k8s.Get(ctx, types.NamespacedName{Name: teamName, Namespace: "default"}, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, "concourse-ci.org/team-finalizer")
+					_ = k8s.Update(ctx, latest)
+					_ = k8s.Delete(ctx, latest)
+				}
 				_ = concourseClient.Team(teamName).DestroyTeam(teamName)
 				_ = k8s.Delete(ctx, inst)
+				_ = teamCR
 			})
 		})
 
@@ -395,7 +419,8 @@ var _ = Describe("Controller Integration", func() {
 
 			fetched := &concoursev1alpha1.Pipeline{}
 			Expect(k8s.Get(ctx, plNSN, fetched)).To(Succeed())
-			Expect(fetched.Status.PipelineID).To(BeNumerically(">", 0))
+			Expect(fetched.Status.PipelineID).NotTo(BeNil())
+			Expect(*fetched.Status.PipelineID).To(BeNumerically(">", 0))
 			Expect(fetched.Status.ConfigHash).NotTo(BeEmpty())
 			cond := k8smeta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
@@ -433,7 +458,8 @@ var _ = Describe("Controller Integration", func() {
 
 			fetched := &concoursev1alpha1.Pipeline{}
 			Expect(k8s.Get(ctx, plNSN, fetched)).To(Succeed())
-			Expect(fetched.Status.Paused).To(BeTrue())
+			Expect(fetched.Status.Paused).NotTo(BeNil())
+			Expect(*fetched.Status.Paused).To(BeTrue())
 
 			p, found, err := concourseClient.Team(teamName).Pipeline(atc.PipelineRef{Name: plName})
 			Expect(err).NotTo(HaveOccurred())
@@ -540,7 +566,8 @@ var _ = Describe("Controller Integration", func() {
 
 			fetched := &concoursev1alpha1.Build{}
 			Expect(k8s.Get(ctx, buildNSN, fetched)).To(Succeed())
-			Expect(fetched.Status.BuildID).To(BeNumerically(">", 0), "BuildID must be set after triggering")
+			Expect(fetched.Status.BuildID).NotTo(BeNil())
+			Expect(*fetched.Status.BuildID).To(BeNumerically(">", 0), "BuildID must be set after triggering")
 			Expect(fetched.Status.BuildName).NotTo(BeEmpty())
 			GinkgoWriter.Printf("Concourse build triggered: ID=%d name=%s status=%s\n",
 				fetched.Status.BuildID, fetched.Status.BuildName, fetched.Status.ConcourseStatus)

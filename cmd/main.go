@@ -18,8 +18,10 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -38,6 +41,7 @@ import (
 	concoursev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
 	"github.com/jakobmoellerdev/concourse-operator/internal/controller"
+	"github.com/jakobmoellerdev/concourse-operator/internal/selfregistration"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -80,6 +84,14 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var selfRegister bool
+	var selfRegisterName string
+	var selfRegisterType string
+	var selfRegisterHeartbeat time.Duration
+	flag.BoolVar(&selfRegister, "self-register", true, "If set, register this operator as a maestro LifecycleManager CR on startup and heartbeat its status.")
+	flag.StringVar(&selfRegisterName, "self-register-name", "", "Override the auto-derived '<namespace>-<serviceaccount>' name of the self-registered LifecycleManager CR.")
+	flag.StringVar(&selfRegisterType, "self-register-type", "concourse", "Value published as spec.type on the self-registered LifecycleManager CR.")
+	flag.DurationVar(&selfRegisterHeartbeat, "self-register-heartbeat", selfregistration.DefaultHeartbeatInterval, "Interval between status.lastHeartbeatTime refreshes on the self-registered LifecycleManager CR.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -171,62 +183,76 @@ func main() {
 	clientCache := concourse.NewCache()
 
 	if err := (&controller.InstanceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("instance-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "instance")
 		os.Exit(1)
 	}
 	if err := (&controller.TeamReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("team-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "team")
 		os.Exit(1)
 	}
 	if err := (&controller.PipelineReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("pipeline-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pipeline")
 		os.Exit(1)
 	}
 	if err := (&controller.JobReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("job-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "job")
 		os.Exit(1)
 	}
 	if err := (&controller.BuildReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("build-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "build")
 		os.Exit(1)
 	}
 	if err := (&controller.ResourceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("resource-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "resource")
 		os.Exit(1)
 	}
 	if err := (&controller.WorkerReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("worker-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "worker")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	if selfRegister {
+		if err := setupSelfRegistration(mgr, selfRegisterName, selfRegisterType, selfRegisterHeartbeat); err != nil {
+			setupLog.Error(err, "Failed to set up LifecycleManager self-registration")
+			os.Exit(1)
+		}
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")
@@ -242,4 +268,32 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// setupSelfRegistration derives the operator's pod identity from the SA
+// mount, builds a maestro LifecycleManager registrar, and hands it to the
+// controller-runtime manager. Running outside a pod is not an error.
+func setupSelfRegistration(mgr ctrl.Manager, name, typ string, heartbeat time.Duration) error {
+	identity, err := selfregistration.FromServiceAccountMount()
+	if err != nil {
+		if errors.Is(err, selfregistration.ErrNotInCluster) {
+			setupLog.Info("Skipping LifecycleManager self-registration: not running in a pod")
+			return nil
+		}
+		return err
+	}
+	direct, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+	if err != nil {
+		return err
+	}
+	reg, err := selfregistration.New(selfregistration.Options{
+		Client: direct, Identity: identity, Name: name, Type: typ,
+		Scheme: mgr.GetScheme(), HeartbeatInterval: heartbeat,
+		Log: ctrl.Log.WithName("selfregistration"),
+	})
+	if err != nil {
+		return err
+	}
+	setupLog.Info("Registering LifecycleManager self-registration runnable", "name", reg.Name(), "type", typ, "supportedResourceTypes", reg.SupportedResourceTypes())
+	return mgr.Add(reg)
 }

@@ -8,9 +8,13 @@ metadata:
 spec:
   group: concourse-ci.org
   names:
+    categories:
+    - concourse
     kind: Resource
     listKind: ResourceList
     plural: resources
+    shortNames:
+    - ccr
     singular: resource
   scope: Namespaced
   versions:
@@ -18,7 +22,7 @@ spec:
     - jsonPath: .spec.pipelineRef.name
       name: Pipeline
       type: string
-    - jsonPath: .spec.resourceName
+    - jsonPath: .status.resolvedName
       name: Resource
       type: string
     - jsonPath: .status.pinned
@@ -27,14 +31,27 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
+    - jsonPath: .status.conditions[?(@.type=="CheckHealthy")].status
+      name: Check
+      priority: 1
+      type: string
+    - jsonPath: .status.webURL
+      name: WebURL
+      priority: 1
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspended
+      priority: 1
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Resource manages a resource within a Concourse pipeline (pin,
-          check).
+        description: |-
+          Resource is a projection of one named resource inside a Pipeline.
+          It manages pin/unpin and operator-driven checks.
         properties:
           apiVersion:
             description: |-
@@ -54,25 +71,41 @@ spec:
           metadata:
             type: object
           spec:
-            description: ResourceSpec defines the desired state of Resource.
+            description: |-
+              ResourceSpec defines the desired state of a pipeline resource projection.
+              The CR does not define the Concourse resource (type/source live in the
+              Pipeline config); it pins and checks an existing named resource.
             properties:
               checkInterval:
                 description: |-
                   CheckInterval triggers a Concourse resource check at this interval.
                   When unset, no automatic checks are triggered by the operator.
                 type: string
+              pinComment:
+                description: PinComment is an optional comment explaining why the
+                  version was pinned.
+                maxLength: 512
+                type: string
               pinnedVersion:
                 additionalProperties:
                   type: string
                 description: |-
                   PinnedVersion pins the resource to a specific version.
-                  When set, the controller calls PinResourceVersion in Concourse.
+                  When set, the controller looks up the version ID and calls PinResourceVersion.
                   When cleared, the controller calls UnpinResource.
+                minProperties: 1
                 type: object
               pipelineRef:
                 description: PipelineRef references the Pipeline that owns this resource.
                 properties:
                   name:
+                    description: Name of the referent.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the referent. Empty means the same namespace
+                      as the referring object.
+                    minLength: 1
                     type: string
                 required:
                 - name
@@ -80,10 +113,24 @@ spec:
               resourceName:
                 description: ResourceName is the resource name within the pipeline.
                   Defaults to metadata.name.
+                maxLength: 100
+                minLength: 1
+                pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
                 type: string
+              suspend:
+                default: false
+                description: |-
+                  Suspend stops all reconciliation activity on this Resource.
+                  Existing Concourse state is left untouched.
+                type: boolean
             required:
             - pipelineRef
             type: object
+            x-kubernetes-validations:
+            - message: resourceName is immutable
+              rule: '!has(oldSelf.resourceName) || self.resourceName == oldSelf.resourceName'
+            - message: pipelineRef is immutable
+              rule: self.pipelineRef == oldSelf.pipelineRef
           status:
             description: ResourceStatus defines the observed state of Resource.
             properties:
@@ -160,12 +207,21 @@ spec:
                 format: int64
                 type: integer
               pinned:
-                description: Pinned indicates whether the resource is currently pinned.
+                description: Pinned indicates whether the resource is currently pinned
+                  in Concourse.
                 type: boolean
               pinnedVersionID:
                 description: PinnedVersionID is the Concourse resource version ID
                   that is pinned.
+                format: int32
                 type: integer
+              resolvedName:
+                description: ResolvedName is the Concourse resource name after defaulting.
+                type: string
+              webURL:
+                description: WebURL is the Concourse UI URL for this resource.
+                format: uri
+                type: string
             type: object
         required:
         - spec

@@ -9,4 +9,4 @@ spec:
   instanceRef:
     name: instance-sample
   workerName: worker-1
-  desiredState: active
+  lifecycle: Running

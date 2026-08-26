@@ -1,10 +1,7 @@
 apiVersion: concourse-ci.org/v1alpha1
 kind: Instance
 metadata:
-  labels:
-    app.kubernetes.io/name: concourse-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: instance-sample
+  name: local
 spec:
   url: http://localhost:8080
   auth:
@@ -13,4 +10,4 @@ spec:
       passwordRef:
         name: concourse-local-credentials
         key: password
-  healthProbeInterval: 5m
+  healthProbeInterval: 1m

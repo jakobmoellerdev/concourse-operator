@@ -5,10 +5,10 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/License-2.0
 
 Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
+distributed under the License is distributed on "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
@@ -70,21 +70,32 @@ func BuildHTTPClient(ctx context.Context, k8sClient client.Client, namespace str
 	transport := &http.Transport{TLSClientConfig: tlsCfg}
 
 	switch {
-	case spec.BasicAuth != nil:
-		password, err := readSecretKey(ctx, k8sClient, namespace, spec.BasicAuth.PasswordRef)
+	case spec.Auth.Password != nil:
+		password, err := readSecretKey(ctx, k8sClient, namespace, spec.Auth.Password.PasswordRef)
 		if err != nil {
-			return nil, fmt.Errorf("read basic auth password: %w", err)
+			return nil, fmt.Errorf("read password grant password: %w", err)
+		}
+		clientID := spec.Auth.Password.ClientID
+		if clientID == "" {
+			clientID = flyOAuthClientID
+		}
+		clientSecret := flyOAuthClientSecret
+		if spec.Auth.Password.ClientSecretRef != nil {
+			clientSecret, err = readSecretKey(ctx, k8sClient, namespace, *spec.Auth.Password.ClientSecretRef)
+			if err != nil {
+				return nil, fmt.Errorf("read password grant client secret: %w", err)
+			}
 		}
 		oauthCfg := &oauth2.Config{
-			ClientID:     flyOAuthClientID,
-			ClientSecret: flyOAuthClientSecret,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
 			Endpoint:     oauth2.Endpoint{TokenURL: spec.URL + "/sky/issuer/token"},
 			Scopes:       []string{"openid", "profile", "email", "federated:id", "groups"},
 		}
 		src := &passwordTokenSource{
 			oauthCfg:  oauthCfg,
 			transport: transport,
-			username:  spec.BasicAuth.Username,
+			username:  spec.Auth.Password.Username,
 			password:  password,
 		}
 		// ReuseTokenSource caches the token in memory and only calls src.Token()
@@ -96,8 +107,8 @@ func BuildHTTPClient(ctx context.Context, k8sClient client.Client, namespace str
 			},
 		}, nil
 
-	case spec.TokenAuth != nil:
-		token, err := readSecretKey(ctx, k8sClient, namespace, spec.TokenAuth.TokenRef)
+	case spec.Auth.Token != nil:
+		token, err := readSecretKey(ctx, k8sClient, namespace, spec.Auth.Token.TokenRef)
 		if err != nil {
 			return nil, fmt.Errorf("read token auth: %w", err)
 		}
@@ -112,7 +123,7 @@ func BuildHTTPClient(ctx context.Context, k8sClient client.Client, namespace str
 		}, nil
 	}
 
-	return &http.Client{Transport: transport}, nil
+	return nil, fmt.Errorf("instance auth is required: set spec.auth.password or spec.auth.token")
 }
 
 // NewConcourseClient creates a go-concourse Client from a built http.Client.
@@ -154,4 +165,22 @@ func readSecretKey(ctx context.Context, k8sClient client.Client, namespace strin
 		return "", fmt.Errorf("key %q not found in secret %s/%s", ref.Key, namespace, ref.Name)
 	}
 	return string(val), nil
+}
+
+// AuthSecretGeneration returns the generation of the Secret used for auth, or 0.
+func AuthSecretGeneration(ctx context.Context, k8sClient client.Client, namespace string, spec concourcev1alpha1.InstanceSpec) int64 {
+	var name string
+	switch {
+	case spec.Auth.Password != nil:
+		name = spec.Auth.Password.PasswordRef.Name
+	case spec.Auth.Token != nil:
+		name = spec.Auth.Token.TokenRef.Name
+	default:
+		return 0
+	}
+	secret := &corev1.Secret{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, secret); err != nil {
+		return 0
+	}
+	return secret.Generation
 }

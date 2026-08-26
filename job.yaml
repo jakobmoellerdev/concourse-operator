@@ -1,0 +1,8 @@
+apiVersion: concourse-ci.org/v1alpha1
+kind: Job
+metadata:
+  name: hello
+spec:
+  pipelineRef:
+    name: hello-world
+  jobName: hello

@@ -51,9 +51,7 @@ var _ = Describe("Instance Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: concoursev1alpha1.InstanceSpec{
-						URL: "https://ci.example.com",
-					},
+					Spec: testInstanceSpec(),
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -85,7 +83,7 @@ var _ = Describe("Instance Controller", func() {
 			By("Creating a fresh instance for this test")
 			finalizerInst := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance-finalizer", Namespace: "default"},
-				Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+				Spec:       testInstanceSpec(),
 			}
 			Expect(k8sClient.Create(ctx, finalizerInst)).To(Succeed())
 			DeferCleanup(func() {
@@ -117,7 +115,7 @@ var _ = Describe("Instance Controller", func() {
 			By("Creating a fresh instance for this test")
 			authInst := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance-auth", Namespace: "default"},
-				Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+				Spec:       testInstanceSpec(),
 			}
 			Expect(k8sClient.Create(ctx, authInst)).To(Succeed())
 			DeferCleanup(func() {
@@ -160,7 +158,7 @@ var _ = Describe("Instance Controller", func() {
 			By("Creating the instance")
 			resource := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: deleteName, Namespace: "default"},
-				Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+				Spec:       testInstanceSpec(),
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
@@ -198,7 +196,7 @@ var _ = Describe("Instance Controller", func() {
 			By("Creating a fresh instance")
 			inst := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "instance-happy", Namespace: "default"},
-				Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+				Spec:       testInstanceSpec(),
 			}
 			Expect(k8sClient.Create(ctx, inst)).To(Succeed())
 			nsn := types.NamespacedName{Name: "instance-happy", Namespace: "default"}
@@ -246,7 +244,8 @@ var _ = Describe("Instance Controller", func() {
 			fetched := &concoursev1alpha1.Instance{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
 			Expect(fetched.Status.Version).To(Equal("7.11.0"))
-			Expect(fetched.Status.WorkerCount).To(Equal(2))
+			Expect(fetched.Status.WorkerCount).NotTo(BeNil())
+			Expect(*fetched.Status.WorkerCount).To(Equal(int32(2)))
 			readyCond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
@@ -261,8 +260,9 @@ var _ = Describe("Instance Controller", func() {
 			inst := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "instance-interval", Namespace: "default"},
 				Spec: concoursev1alpha1.InstanceSpec{
-					URL:      "https://ci.example.com",
-					Interval: twoMin,
+					URL:                 "https://ci.example.com",
+					Auth:                testInstanceAuth(),
+					HealthProbeInterval: &twoMin,
 				},
 			}
 			Expect(k8sClient.Create(ctx, inst)).To(Succeed())

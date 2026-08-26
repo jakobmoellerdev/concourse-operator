@@ -44,6 +44,10 @@ type fakeTeam struct {
 	createJobBuildFn               func(atc.PipelineRef, string) (atc.Build, error)
 	checkResourceFn                func(atc.PipelineRef, string, atc.Version, bool) (atc.Build, bool, error)
 	resourceVersionsFn             func(atc.PipelineRef, string, goconcourse.Page, atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error)
+	jobFn                          func(atc.PipelineRef, string) (atc.Job, bool, error)
+	resourceFn                     func(atc.PipelineRef, string) (atc.Resource, bool, error)
+	pinResourceVersionFn           func(atc.PipelineRef, string, int) (bool, error)
+	unpinResourceFn                func(atc.PipelineRef, string) (bool, error)
 }
 
 func (t *fakeTeam) Name() string       { return t.name }
@@ -142,8 +146,11 @@ func (t *fakeTeam) BuildInputsForJob(_ atc.PipelineRef, _ string) ([]atc.BuildIn
 	return nil, false, nil
 }
 
-func (t *fakeTeam) Job(_ atc.PipelineRef, _ string) (atc.Job, bool, error) {
-	return atc.Job{}, false, nil
+func (t *fakeTeam) Job(ref atc.PipelineRef, name string) (atc.Job, bool, error) {
+	if t.jobFn != nil {
+		return t.jobFn(ref, name)
+	}
+	return atc.Job{Name: name}, true, nil
 }
 
 func (t *fakeTeam) JobBuild(_ atc.PipelineRef, _, _ string) (atc.Build, bool, error) {
@@ -188,8 +195,11 @@ func (t *fakeTeam) UnpauseJob(ref atc.PipelineRef, jobName string) (bool, error)
 
 func (t *fakeTeam) ClearTaskCache(_ atc.PipelineRef, _, _, _ string) (int64, error) { return 0, nil }
 
-func (t *fakeTeam) Resource(_ atc.PipelineRef, _ string) (atc.Resource, bool, error) {
-	return atc.Resource{}, false, nil
+func (t *fakeTeam) Resource(ref atc.PipelineRef, name string) (atc.Resource, bool, error) {
+	if t.resourceFn != nil {
+		return t.resourceFn(ref, name)
+	}
+	return atc.Resource{Name: name}, true, nil
 }
 
 func (t *fakeTeam) ListResources(_ atc.PipelineRef) ([]atc.Resource, error) { return nil, nil }
@@ -245,11 +255,19 @@ func (t *fakeTeam) ClearResourceCache(_ atc.PipelineRef, _ string, _ atc.Version
 	return 0, nil
 }
 
-func (t *fakeTeam) PinResourceVersion(_ atc.PipelineRef, _ string, _ int) (bool, error) {
-	return false, nil
+func (t *fakeTeam) PinResourceVersion(ref atc.PipelineRef, name string, id int) (bool, error) {
+	if t.pinResourceVersionFn != nil {
+		return t.pinResourceVersionFn(ref, name, id)
+	}
+	return true, nil
 }
 
-func (t *fakeTeam) UnpinResource(_ atc.PipelineRef, _ string) (bool, error) { return false, nil }
+func (t *fakeTeam) UnpinResource(ref atc.PipelineRef, name string) (bool, error) {
+	if t.unpinResourceFn != nil {
+		return t.unpinResourceFn(ref, name)
+	}
+	return true, nil
+}
 func (t *fakeTeam) SetPinComment(_ atc.PipelineRef, _, _ string) (bool, error) {
 	return false, nil
 }

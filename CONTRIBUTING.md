@@ -3,7 +3,7 @@
 ## Prerequisites
 
 | Tool | Version | Purpose |
-|------|---------|---------|
+| ------ | --------- | --------- |
 | Go | 1.26.2+ | Build and test |
 | Docker | 17.03+ | Local Concourse fixture, image builds |
 | kubectl | 1.11.3+ | Cluster interaction |
@@ -89,7 +89,7 @@ make run
 kubectl apply -f config/samples/
 ```
 
-The samples are ordered so that applying the whole directory works without conflicts (ConcourseInstance → ConcourseTeam → ConcoursePipeline → ConcourseJob / ConcourseResource / ConcourseWorker).
+The samples are ordered so that applying the whole directory works without conflicts (Instance → Team → Pipeline → Job / Build / Resource / Worker).
 
 ## Submitting Changes
 
