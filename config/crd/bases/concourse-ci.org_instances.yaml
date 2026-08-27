@@ -9,355 +9,397 @@ spec:
   group: concourse-ci.org
   names:
     categories:
-    - concourse
+      - concourse
     kind: Instance
     listKind: InstanceList
     plural: instances
     shortNames:
-    - cci
-    - concinst
+      - cci
+      - concinst
     singular: instance
   scope: Namespaced
   versions:
-  - additionalPrinterColumns:
-    - jsonPath: .spec.url
-      name: URL
-      type: string
-    - jsonPath: .status.version
-      name: Version
-      type: string
-    - jsonPath: .status.workerCount
-      name: Workers
-      type: integer
-    - jsonPath: .status.stalledWorkers
-      name: Stalled
-      type: integer
-    - jsonPath: .status.conditions[?(@.type=="Ready")].status
-      name: Ready
-      type: string
-    - jsonPath: .status.webURL
-      name: WebURL
-      priority: 1
-      type: string
-    - jsonPath: .status.clusterName
-      name: Cluster
-      priority: 1
-      type: string
-    - jsonPath: .spec.suspend
-      name: Suspended
-      priority: 1
-      type: boolean
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-    name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        description: Instance represents a connection to a Concourse CI server.
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: InstanceSpec defines the desired state of Instance.
-            properties:
-              allowedNamespaces:
-                description: |-
-                  AllowedNamespaces lists namespaces whose Team/Worker CRs may reference this
-                  Instance. Empty means only the Instance's own namespace is allowed.
-                items:
-                  type: string
-                type: array
-              auth:
-                description: Auth configures authentication to the ATC. Required.
-                properties:
-                  password:
-                    description: Password configures an OAuth2 password grant (local
-                      user).
-                    properties:
-                      clientID:
-                        description: ClientID is the OAuth2 client ID. Defaults to
-                          the well-known fly client.
-                        type: string
-                      clientSecretRef:
-                        description: |-
-                          ClientSecretRef references the Secret key containing the OAuth2 client secret.
-                          When unset, the well-known fly client secret is used.
-                        properties:
-                          key:
-                            description: Key within the Secret.
-                            minLength: 1
-                            type: string
-                          name:
-                            description: Name of the Secret.
-                            minLength: 1
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                      passwordRef:
-                        description: PasswordRef references the Secret key containing
-                          the password.
-                        properties:
-                          key:
-                            description: Key within the Secret.
-                            minLength: 1
-                            type: string
-                          name:
-                            description: Name of the Secret.
-                            minLength: 1
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                      username:
-                        description: Username for the password grant.
-                        minLength: 1
-                        type: string
-                    required:
-                    - passwordRef
-                    - username
-                    type: object
-                  token:
-                    description: Token configures bearer token authentication.
-                    properties:
-                      tokenRef:
-                        description: TokenRef references the Secret key containing
-                          the bearer token.
-                        properties:
-                          key:
-                            description: Key within the Secret.
-                            minLength: 1
-                            type: string
-                          name:
-                            description: Name of the Secret.
-                            minLength: 1
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                    required:
-                    - tokenRef
-                    type: object
-                type: object
-                x-kubernetes-validations:
-                - message: exactly one of password or token must be set
-                  rule: '[has(self.password), has(self.token)].filter(x, x).size()
-                    == 1'
-              defaultTeam:
-                default: main
-                description: DefaultTeam is the default team name to use when not
-                  specified (defaults to "main").
-                pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
-                type: string
-              healthProbeInterval:
-                default: 5m
-                description: HealthProbeInterval is how often the controller probes
-                  this instance.
-                type: string
-              suspend:
-                default: false
-                description: |-
-                  Suspend stops all reconciliation activity on this Instance.
-                  Existing Concourse state is left untouched.
-                type: boolean
-              tls:
-                description: TLS configures TLS settings for the connection.
-                properties:
-                  caRef:
-                    description: CARef references a Secret key containing a PEM-encoded
-                      CA certificate.
-                    properties:
-                      key:
-                        description: Key within the Secret.
-                        minLength: 1
-                        type: string
-                      name:
-                        description: Name of the Secret.
-                        minLength: 1
-                        type: string
-                    required:
-                    - key
-                    - name
-                    type: object
-                  insecureSkipVerify:
-                    description: InsecureSkipVerify disables TLS certificate verification.
-                    type: boolean
-                type: object
-                x-kubernetes-validations:
-                - message: caRef and insecureSkipVerify are mutually exclusive
-                  rule: '!(has(self.caRef) && self.insecureSkipVerify)'
-              url:
-                description: URL is the base URL of the Concourse ATC, e.g. https://ci.example.com.
-                format: uri
-                maxLength: 2048
-                pattern: ^https?://.+
-                type: string
-            required:
-            - auth
-            - url
-            type: object
-            x-kubernetes-validations:
-            - message: healthProbeInterval must be between 30s and 1h
-              rule: '!has(self.healthProbeInterval) || (duration(self.healthProbeInterval)
-                >= duration(''30s'') && duration(self.healthProbeInterval) <= duration(''1h''))'
-          status:
-            description: InstanceStatus defines the observed state of Instance.
-            properties:
-              authSecretGeneration:
-                description: AuthSecretGeneration is the generation of the Secret
-                  last used for auth.
-                format: int64
-                type: integer
-              authenticatedAdmin:
-                description: AuthenticatedAdmin indicates whether the connected user
-                  is a Concourse cluster admin.
-                type: boolean
-              authenticatedUser:
-                description: AuthenticatedUser is the username currently used to connect.
-                type: string
-              clusterName:
-                description: ClusterName is the human-readable cluster name reported
-                  by Concourse.
-                type: string
-              conditions:
-                items:
-                  description: Condition contains details for one aspect of the current
-                    state of this API Resource.
+    - additionalPrinterColumns:
+        - jsonPath: .spec.url
+          name: URL
+          type: string
+        - jsonPath: .status.version
+          name: Version
+          type: string
+        - jsonPath: .status.workerCount
+          name: Workers
+          type: integer
+        - jsonPath: .status.stalledWorkers
+          name: Stalled
+          type: integer
+        - jsonPath: .status.conditions[?(@.type=="Ready")].status
+          name: Ready
+          type: string
+        - jsonPath: .status.webURL
+          name: WebURL
+          priority: 1
+          type: string
+        - jsonPath: .status.clusterName
+          name: Cluster
+          priority: 1
+          type: string
+        - jsonPath: .spec.suspend
+          name: Suspended
+          priority: 1
+          type: boolean
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: Instance represents a connection to a Concourse CI server.
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: InstanceSpec defines the desired state of Instance.
+              properties:
+                allowedNamespaces:
+                  description: |-
+                    AllowedNamespaces lists namespaces whose Team/Worker CRs may reference this
+                    Instance. Empty means only the Instance's own namespace is allowed.
+                  items:
+                    type: string
+                  type: array
+                auth:
+                  description: Auth configures authentication to the ATC. Required.
                   properties:
-                    lastTransitionTime:
-                      description: |-
-                        lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
-                      format: date-time
-                      type: string
-                    message:
-                      description: |-
-                        message is a human readable message indicating details about the transition.
-                        This may be an empty string.
-                      maxLength: 32768
-                      type: string
-                    observedGeneration:
-                      description: |-
-                        observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
-                      format: int64
-                      minimum: 0
-                      type: integer
-                    reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                        Producers of specific condition types may define expected values and meanings for this field,
-                        and whether the values are considered a guaranteed API.
-                        The value should be a CamelCase string.
-                        This field may not be empty.
-                      maxLength: 1024
-                      minLength: 1
-                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
-                      type: string
-                    status:
-                      description: status of the condition, one of True, False, Unknown.
-                      enum:
-                      - "True"
-                      - "False"
-                      - Unknown
-                      type: string
-                    type:
-                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
-                      maxLength: 316
-                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
-                      type: string
-                  required:
-                  - lastTransitionTime
-                  - message
-                  - reason
-                  - status
-                  - type
+                    password:
+                      description:
+                        Password configures an OAuth2 password grant (local
+                        user).
+                      properties:
+                        clientID:
+                          description:
+                            ClientID is the OAuth2 client ID. Defaults to
+                            the well-known fly client.
+                          type: string
+                        clientSecretRef:
+                          description: |-
+                            ClientSecretRef references the Secret key containing the OAuth2 client secret.
+                            When unset, the well-known fly client secret is used.
+                          properties:
+                            key:
+                              description: Key within the Secret.
+                              minLength: 1
+                              type: string
+                            name:
+                              description: Name of the Secret.
+                              minLength: 1
+                              type: string
+                          required:
+                            - key
+                            - name
+                          type: object
+                        passwordRef:
+                          description:
+                            PasswordRef references the Secret key containing
+                            the password.
+                          properties:
+                            key:
+                              description: Key within the Secret.
+                              minLength: 1
+                              type: string
+                            name:
+                              description: Name of the Secret.
+                              minLength: 1
+                              type: string
+                          required:
+                            - key
+                            - name
+                          type: object
+                        username:
+                          description: Username for the password grant.
+                          minLength: 1
+                          type: string
+                      required:
+                        - passwordRef
+                        - username
+                      type: object
+                    token:
+                      description: Token configures bearer token authentication.
+                      properties:
+                        tokenRef:
+                          description:
+                            TokenRef references the Secret key containing
+                            the bearer token.
+                          properties:
+                            key:
+                              description: Key within the Secret.
+                              minLength: 1
+                              type: string
+                            name:
+                              description: Name of the Secret.
+                              minLength: 1
+                              type: string
+                          required:
+                            - key
+                            - name
+                          type: object
+                      required:
+                        - tokenRef
+                      type: object
                   type: object
-                type: array
-                x-kubernetes-list-map-keys:
-                - type
-                x-kubernetes-list-type: map
-              externalURL:
-                description: ExternalURL is the externally-visible URL reported by
-                  the Concourse server.
-                type: string
-              featureFlags:
-                additionalProperties:
+                  x-kubernetes-validations:
+                    - message: exactly one of password or token must be set
+                      rule:
+                        "[has(self.password), has(self.token)].filter(x, x).size()
+                        == 1"
+                defaultTeam:
+                  default: main
+                  description:
+                    DefaultTeam is the default team name to use when not
+                    specified (defaults to "main").
+                  pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+                  type: string
+                defaults:
+                  description:
+                    Defaults provides fallback settings for pipelines managed
+                    under this instance.
+                  properties:
+                    k8sConfigImage:
+                      description:
+                        K8sConfigImage sets the default image used for auto-injected
+                        Kubernetes config resources.
+                      properties:
+                        repository:
+                          description: Repository is the image repository (e.g. ghcr.io/org/k8s-config-resource).
+                          minLength: 1
+                          type: string
+                        tag:
+                          description: Tag is the image tag. Defaults to latest.
+                          type: string
+                      required:
+                        - repository
+                      type: object
+                  type: object
+                healthProbeInterval:
+                  default: 5m
+                  description:
+                    HealthProbeInterval is how often the controller probes
+                    this instance.
+                  type: string
+                suspend:
+                  default: false
+                  description: |-
+                    Suspend stops all reconciliation activity on this Instance.
+                    Existing Concourse state is left untouched.
                   type: boolean
-                description: FeatureFlags maps the Concourse server's enabled feature
-                  flags.
-                type: object
-              landingWorkers:
-                description: LandingWorkers is the number of workers in the "landing"
-                  state.
-                format: int32
-                type: integer
-              observedGeneration:
-                description: ObservedGeneration is the last generation that was reconciled.
-                format: int64
-                type: integer
-              pipelineCount:
-                description: PipelineCount is the total number of pipelines found
-                  in this Concourse instance.
-                format: int32
-                type: integer
-              runningWorkers:
-                description: RunningWorkers is the number of workers in the "running"
-                  state.
-                format: int32
-                type: integer
-              stalledWorkers:
-                description: StalledWorkers is the number of workers in the "stalled"
-                  state.
-                format: int32
-                type: integer
-              teamCount:
-                description: TeamCount is the total number of teams found in this
-                  Concourse instance.
-                format: int32
-                type: integer
-              version:
-                description: Version is the Concourse server version string.
-                type: string
-              wallMessage:
-                description: WallMessage is any active cluster-wide notification message.
-                type: string
-              webURL:
-                description: WebURL is the Concourse UI URL for this instance.
-                format: uri
-                type: string
-              workerCount:
-                description: WorkerCount is the total number of registered workers.
-                format: int32
-                type: integer
-              workerVersion:
-                description: WorkerVersion is the minimum worker binary version required
-                  by this instance.
-                type: string
-            type: object
-        required:
-        - spec
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
+                tls:
+                  description: TLS configures TLS settings for the connection.
+                  properties:
+                    caRef:
+                      description:
+                        CARef references a Secret key containing a PEM-encoded
+                        CA certificate.
+                      properties:
+                        key:
+                          description: Key within the Secret.
+                          minLength: 1
+                          type: string
+                        name:
+                          description: Name of the Secret.
+                          minLength: 1
+                          type: string
+                      required:
+                        - key
+                        - name
+                      type: object
+                    insecureSkipVerify:
+                      description: InsecureSkipVerify disables TLS certificate verification.
+                      type: boolean
+                  type: object
+                  x-kubernetes-validations:
+                    - message: caRef and insecureSkipVerify are mutually exclusive
+                      rule: "!(has(self.caRef) && self.insecureSkipVerify)"
+                url:
+                  description: URL is the base URL of the Concourse ATC, e.g. https://ci.example.com.
+                  format: uri
+                  maxLength: 2048
+                  pattern: ^https?://.+
+                  type: string
+              required:
+                - auth
+                - url
+              type: object
+              x-kubernetes-validations:
+                - message: healthProbeInterval must be between 30s and 1h
+                  rule:
+                    "!has(self.healthProbeInterval) || (duration(self.healthProbeInterval)
+                    >= duration('30s') && duration(self.healthProbeInterval) <= duration('1h'))"
+            status:
+              description: InstanceStatus defines the observed state of Instance.
+              properties:
+                authSecretGeneration:
+                  description:
+                    AuthSecretGeneration is the generation of the Secret
+                    last used for auth.
+                  format: int64
+                  type: integer
+                authenticatedAdmin:
+                  description:
+                    AuthenticatedAdmin indicates whether the connected user
+                    is a Concourse cluster admin.
+                  type: boolean
+                authenticatedUser:
+                  description: AuthenticatedUser is the username currently used to connect.
+                  type: string
+                clusterName:
+                  description:
+                    ClusterName is the human-readable cluster name reported
+                    by Concourse.
+                  type: string
+                conditions:
+                  items:
+                    description:
+                      Condition contains details for one aspect of the current
+                      state of this API Resource.
+                    properties:
+                      lastTransitionTime:
+                        description: |-
+                          lastTransitionTime is the last time the condition transitioned from one status to another.
+                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        format: date-time
+                        type: string
+                      message:
+                        description: |-
+                          message is a human readable message indicating details about the transition.
+                          This may be an empty string.
+                        maxLength: 32768
+                        type: string
+                      observedGeneration:
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      reason:
+                        description: |-
+                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                          Producers of specific condition types may define expected values and meanings for this field,
+                          and whether the values are considered a guaranteed API.
+                          The value should be a CamelCase string.
+                          This field may not be empty.
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        type: string
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                        type: string
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+                externalURL:
+                  description:
+                    ExternalURL is the externally-visible URL reported by
+                    the Concourse server.
+                  type: string
+                featureFlags:
+                  additionalProperties:
+                    type: boolean
+                  description:
+                    FeatureFlags maps the Concourse server's enabled feature
+                    flags.
+                  type: object
+                landingWorkers:
+                  description:
+                    LandingWorkers is the number of workers in the "landing"
+                    state.
+                  format: int32
+                  type: integer
+                observedGeneration:
+                  description: ObservedGeneration is the last generation that was reconciled.
+                  format: int64
+                  type: integer
+                pipelineCount:
+                  description:
+                    PipelineCount is the total number of pipelines found
+                    in this Concourse instance.
+                  format: int32
+                  type: integer
+                runningWorkers:
+                  description:
+                    RunningWorkers is the number of workers in the "running"
+                    state.
+                  format: int32
+                  type: integer
+                stalledWorkers:
+                  description:
+                    StalledWorkers is the number of workers in the "stalled"
+                    state.
+                  format: int32
+                  type: integer
+                teamCount:
+                  description:
+                    TeamCount is the total number of teams found in this
+                    Concourse instance.
+                  format: int32
+                  type: integer
+                version:
+                  description: Version is the Concourse server version string.
+                  type: string
+                wallMessage:
+                  description: WallMessage is any active cluster-wide notification message.
+                  type: string
+                webURL:
+                  description: WebURL is the Concourse UI URL for this instance.
+                  format: uri
+                  type: string
+                workerCount:
+                  description: WorkerCount is the total number of registered workers.
+                  format: int32
+                  type: integer
+                workerVersion:
+                  description:
+                    WorkerVersion is the minimum worker binary version required
+                    by this instance.
+                  type: string
+              type: object
+          required:
+            - spec
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

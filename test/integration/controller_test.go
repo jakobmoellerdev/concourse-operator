@@ -501,10 +501,98 @@ var _ = Describe("Controller Integration", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(found).To(BeFalse(), "pipeline should be gone from Concourse after CR deletion")
 		})
+
+		It("applies a pipeline with k8sConfigs auto-wiring to live Concourse", func() {
+			const plName = "ctrl-integ-pl-k8scfg"
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: plName, Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: teamName},
+					K8sConfigImage: &concoursev1alpha1.ContainerImageSpec{
+						Repository: "ghcr.io/jakobmoellerdev/concourse-k8s-config-resource",
+						Tag:        "v0.1.0",
+					},
+					K8sConfigs: []concoursev1alpha1.K8sConfigSpec{
+						{
+							Name:         "live-app-config",
+							ConfigMapRef: &concoursev1alpha1.LocalObjectReference{Name: "live-cm"},
+							Trigger:      true,
+						},
+						{
+							Name:      "live-app-secret",
+							SecretRef: &concoursev1alpha1.LocalObjectReference{Name: "live-sec"},
+						},
+					},
+					Config: concoursev1alpha1.PipelineConfig{
+						Inline: `jobs:
+- name: test-job
+  plan:
+  - get: live-app-config
+    trigger: true
+  - get: live-app-secret`,
+					},
+				},
+			}
+			Expect(k8s.Create(ctx, pl)).To(Succeed())
+			plNSN := types.NamespacedName{Name: plName, Namespace: "default"}
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8s.Get(ctx, plNSN, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8s.Update(ctx, latest)
+					_ = k8s.Delete(ctx, latest)
+				}
+				_, _ = concourseClient.Team(teamName).DeletePipeline(atc.PipelineRef{Name: plName})
+			})
+
+			reconcilePipeline(ctx, k8s, cache, plName)
+
+			By("Checking Concourse ATC received the rendered config with k8s-config resource type and resources")
+			cfg, _, found, err := concourseClient.Team(teamName).PipelineConfig(atc.PipelineRef{Name: plName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+
+			// 1. Verify resource type was injected into Concourse
+			var foundRT *atc.ResourceType
+			for i, rt := range cfg.ResourceTypes {
+				if rt.Name == "k8s-config" {
+					foundRT = &cfg.ResourceTypes[i]
+					break
+				}
+			}
+			Expect(foundRT).NotTo(BeNil())
+			Expect(foundRT.Type).To(Equal("registry-image"))
+			Expect(foundRT.Source["repository"]).To(Equal("ghcr.io/jakobmoellerdev/concourse-k8s-config-resource"))
+			Expect(foundRT.Source["tag"]).To(Equal("v0.1.0"))
+
+			// 2. Verify ConfigMap and Secret resources were injected into Concourse
+			var foundCM, foundSec *atc.ResourceConfig
+			for i, res := range cfg.Resources {
+				if res.Name == "live-app-config" {
+					foundCM = &cfg.Resources[i]
+				}
+				if res.Name == "live-app-secret" {
+					foundSec = &cfg.Resources[i]
+				}
+			}
+			Expect(foundCM).NotTo(BeNil())
+			Expect(foundCM.Type).To(Equal("k8s-config"))
+			Expect(foundCM.Source["kind"]).To(Equal("ConfigMap"))
+			Expect(foundCM.Source["name"]).To(Equal("live-cm"))
+			Expect(foundCM.Source["namespace"]).To(Equal("default"))
+
+			Expect(foundSec).NotTo(BeNil())
+			Expect(foundSec.Type).To(Equal("k8s-config"))
+			Expect(foundSec.Source["kind"]).To(Equal("Secret"))
+			Expect(foundSec.Source["name"]).To(Equal("live-sec"))
+			Expect(foundSec.Source["namespace"]).To(Equal("default"))
+		})
 	})
 
 	// -----------------------------------------------------------------------
 	Describe("BuildReconciler", func() {
+		const pipelineFinalizer = "concourse-ci.org/pipeline-finalizer"
 		It("triggers a job build in Concourse and sets BuildID in status", func() {
 			const (
 				instName = "ci-build-inst"
@@ -571,6 +659,124 @@ var _ = Describe("Controller Integration", Ordered, func() {
 			Expect(fetched.Status.BuildName).NotTo(BeEmpty())
 			GinkgoWriter.Printf("Concourse build triggered: ID=%d name=%s status=%s\n",
 				fetched.Status.BuildID, fetched.Status.BuildName, fetched.Status.ConcourseStatus)
+		})
+
+		It("runs a job that accesses files from an injected k8sConfig resource", func() {
+			const (
+				instName = "ci-k8s-job-inst"
+				teamName = "ctrl-integ-k8s-team"
+				plName   = "ctrl-integ-k8s-job-pl"
+				jobName  = "read-config"
+			)
+
+			cache := concourse.NewCache()
+			inst := seedInstance(ctx, k8s, cache, instName)
+			DeferCleanup(func() { _ = k8s.Delete(ctx, inst) })
+
+			_ = makeReadyTeamCR(ctx, k8s, teamName, instName)
+			reconcileTeam(ctx, k8s, cache, teamName)
+			DeferCleanup(func() { _ = concourseClient.Team(teamName).DestroyTeam(teamName) })
+
+			// Pipeline that gets the k8s-config resource and passes it as input to a task
+			pipelineYAML := `jobs:
+- name: read-config
+  plan:
+  - get: my-app-config
+  - task: verify-config
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source: { repository: alpine }
+      inputs:
+      - name: my-app-config
+      run:
+        path: sh
+        args: ["-c", "test -d my-app-config && echo 'Config input directory mounted successfully'"]
+`
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: plName, Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: teamName},
+					K8sConfigImage: &concoursev1alpha1.ContainerImageSpec{
+						Repository: "ghcr.io/jakobmoellerdev/concourse-k8s-config-resource",
+						Tag:        "v0.1.0",
+					},
+					K8sConfigs: []concoursev1alpha1.K8sConfigSpec{
+						{
+							Name:         "my-app-config",
+							ConfigMapRef: &concoursev1alpha1.LocalObjectReference{Name: "app-cm"},
+						},
+					},
+					Config: concoursev1alpha1.PipelineConfig{
+						Inline: pipelineYAML,
+					},
+				},
+			}
+			Expect(k8s.Create(ctx, pl)).To(Succeed())
+			plNSN := types.NamespacedName{Name: plName, Namespace: "default"}
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8s.Get(ctx, plNSN, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8s.Update(ctx, latest)
+					_ = k8s.Delete(ctx, latest)
+				}
+				_, _ = concourseClient.Team(teamName).DeletePipeline(atc.PipelineRef{Name: plName})
+			})
+
+			reconcilePipeline(ctx, k8s, cache, plName)
+
+			// Unpause pipeline
+			_, err := concourseClient.Team(teamName).UnpausePipeline(atc.PipelineRef{Name: plName})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Create Job CR
+			jobCR := &concoursev1alpha1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "k8s-read-job", Namespace: "default"},
+				Spec: concoursev1alpha1.JobSpec{
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: plName},
+					JobName:     jobName,
+				},
+			}
+			Expect(k8s.Create(ctx, jobCR)).To(Succeed())
+			jobCR.Status.Conditions = []metav1.Condition{{
+				Type:               concoursev1alpha1.ConditionReady,
+				Status:             metav1.ConditionTrue,
+				Reason:             "Ready",
+				LastTransitionTime: metav1.Now(),
+			}}
+			Expect(k8s.Status().Update(ctx, jobCR)).To(Succeed())
+			DeferCleanup(func() { _ = k8s.Delete(ctx, jobCR) })
+
+			// Create Build CR to trigger this job
+			buildCR := &concoursev1alpha1.Build{
+				ObjectMeta: metav1.ObjectMeta{Name: "k8s-read-build", Namespace: "default"},
+				Spec: concoursev1alpha1.BuildSpec{
+					JobRef: &concoursev1alpha1.LocalObjectReference{Name: "k8s-read-job"},
+				},
+			}
+			Expect(k8s.Create(ctx, buildCR)).To(Succeed())
+			buildNSN := types.NamespacedName{Name: "k8s-read-build", Namespace: "default"}
+			DeferCleanup(func() { _ = k8s.Delete(ctx, buildCR) })
+
+			r := &controller.BuildReconciler{Client: k8s, Scheme: k8s.Scheme(), Cache: cache}
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: buildNSN})
+			Expect(err).NotTo(HaveOccurred())
+
+			fetched := &concoursev1alpha1.Build{}
+			Expect(k8s.Get(ctx, buildNSN, fetched)).To(Succeed())
+			Expect(fetched.Status.BuildID).NotTo(BeNil())
+			Expect(*fetched.Status.BuildID).To(BeNumerically(">", 0))
+
+			// Verify job details from live Concourse
+			job, found, err := concourseClient.Team(teamName).Job(atc.PipelineRef{Name: plName}, jobName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(job.Name).To(Equal(jobName))
+			Expect(job.NextBuild).NotTo(BeNil())
+			GinkgoWriter.Printf("Triggered build for job %q accessing k8sConfig: Build ID=%d\n",
+				jobName, *fetched.Status.BuildID)
 		})
 	})
 })

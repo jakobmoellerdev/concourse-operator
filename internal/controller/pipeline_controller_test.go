@@ -540,5 +540,141 @@ var _ = Describe("Pipeline Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deleteCalled).To(BeTrue(), "expected DeletePipeline to be called during finalization")
 		})
+
+		It("should auto-inject k8sConfigs resource type and resources with image overrides", func() {
+			cache := concourse.NewCache()
+			var capturedPayload []byte
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "main",
+					createOrUpdatePipelineConfigFn: func(_ atc.PipelineRef, _ string, passedConfig []byte, _ bool) (bool, bool, []goconcourse.ConfigWarning, error) {
+						capturedPayload = passedConfig
+						return true, false, nil, nil
+					},
+					pipelineFn: func(_ atc.PipelineRef) (atc.Pipeline, bool, error) {
+						return atc.Pipeline{ID: 10, Name: "k8s-config-pipe"}, true, nil
+					},
+				},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+
+			inst := &concoursev1alpha1.Instance{
+				ObjectMeta: metav1.ObjectMeta{Name: "k8s-cfg-inst", Namespace: "default"},
+				Spec: concoursev1alpha1.InstanceSpec{
+					URL: "http://localhost:8080",
+					Auth: concoursev1alpha1.InstanceAuth{
+						Token: &concoursev1alpha1.TokenAuth{TokenRef: concoursev1alpha1.SecretKeySelector{Name: "sec", Key: "tok"}},
+					},
+					Defaults: &concoursev1alpha1.InstanceDefaults{
+						K8sConfigImage: &concoursev1alpha1.ContainerImageSpec{
+							Repository: "registry.internal/ci/k8s-config-resource",
+							Tag:        "v1.0.0",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, inst)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			inst.Status.Conditions = []metav1.Condition{{
+				Type: concoursev1alpha1.ConditionReady, Status: metav1.ConditionTrue,
+				LastTransitionTime: metav1.Now(), Reason: "Ready",
+			}}
+			Expect(k8sClient.Status().Update(ctx, inst)).To(Succeed())
+			cache.Set(inst, fake)
+
+			team := makeReadyTeam(ctx, "k8s-cfg-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "k8s-cfg-pipe", Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: team.Name},
+					K8sConfigImage: &concoursev1alpha1.ContainerImageSpec{
+						Repository: "custom.registry.io/custom-k8s-resource",
+						Tag:        "v2.1.0",
+					},
+					K8sConfigs: []concoursev1alpha1.K8sConfigSpec{
+						{
+							Name:         "app-config",
+							ConfigMapRef: &concoursev1alpha1.LocalObjectReference{Name: "my-cm"},
+						},
+						{
+							Name:      "app-secret",
+							SecretRef: &concoursev1alpha1.LocalObjectReference{Name: "my-secret", Namespace: "other-ns"},
+						},
+					},
+					Config: concoursev1alpha1.PipelineConfig{
+						Inline: `jobs:
+- name: test
+  plan:
+  - get: app-config
+  - get: app-secret`,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pl)).To(Succeed())
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: pl.Name, Namespace: pl.Namespace}, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			reconciler := &PipelineReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: pl.Name, Namespace: pl.Namespace}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile to sync config
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(capturedPayload).NotTo(BeEmpty())
+
+			var parsed atc.Config
+			Expect(atc.UnmarshalConfig(capturedPayload, &parsed)).To(Succeed())
+
+			// 1. Verify resource type injection with pipeline override image
+			var foundRT *atc.ResourceType
+			for i, rt := range parsed.ResourceTypes {
+				if rt.Name == "k8s-config" {
+					foundRT = &parsed.ResourceTypes[i]
+					break
+				}
+			}
+			Expect(foundRT).NotTo(BeNil(), "expected k8s-config resource_type to be injected")
+			Expect(foundRT.Type).To(Equal("registry-image"))
+			Expect(foundRT.Source["repository"]).To(Equal("custom.registry.io/custom-k8s-resource"))
+			Expect(foundRT.Source["tag"]).To(Equal("v2.1.0"))
+
+			// 2. Verify ConfigMap and Secret resources
+			var foundCM, foundSec *atc.ResourceConfig
+			for i, res := range parsed.Resources {
+				if res.Name == "app-config" {
+					foundCM = &parsed.Resources[i]
+				}
+				if res.Name == "app-secret" {
+					foundSec = &parsed.Resources[i]
+				}
+			}
+			Expect(foundCM).NotTo(BeNil())
+			Expect(foundCM.Type).To(Equal("k8s-config"))
+			Expect(foundCM.Source["kind"]).To(Equal("ConfigMap"))
+			Expect(foundCM.Source["name"]).To(Equal("my-cm"))
+			Expect(foundCM.Source["namespace"]).To(Equal("default"))
+
+			Expect(foundSec).NotTo(BeNil())
+			Expect(foundSec.Type).To(Equal("k8s-config"))
+			Expect(foundSec.Source["kind"]).To(Equal("Secret"))
+			Expect(foundSec.Source["name"]).To(Equal("my-secret"))
+			Expect(foundSec.Source["namespace"]).To(Equal("other-ns"))
+		})
 	})
 })

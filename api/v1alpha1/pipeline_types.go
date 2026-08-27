@@ -149,6 +149,14 @@ type PipelineSpec struct {
 	// +optional
 	// +kubebuilder:default=false
 	Archived bool `json:"archived,omitempty"`
+
+	// K8sConfigImage overrides the resource-type image used for auto-injected Kubernetes config resources.
+	// +optional
+	K8sConfigImage *ContainerImageSpec `json:"k8sConfigImage,omitempty"`
+
+	// K8sConfigs defines ConfigMaps and Secrets to automatically wire as resources into the pipeline.
+	// +optional
+	K8sConfigs []K8sConfigSpec `json:"k8sConfigs,omitempty"`
 }
 
 // PipelineStatus defines the observed state of Pipeline.

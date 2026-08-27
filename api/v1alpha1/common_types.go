@@ -73,3 +73,40 @@ const (
 	// ReclaimOrphan leaves the Concourse object in place when the CR is removed.
 	ReclaimOrphan ReclaimPolicy = "Orphan"
 )
+
+// ContainerImageSpec defines how a resource type container image is sourced.
+type ContainerImageSpec struct {
+	// Repository is the image repository (e.g. ghcr.io/org/k8s-config-resource).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Repository string `json:"repository"`
+
+	// Tag is the image tag. Defaults to latest.
+	// +optional
+	Tag string `json:"tag,omitempty"`
+}
+
+// K8sConfigSpec declares a Kubernetes ConfigMap or Secret to be injected into a pipeline.
+// Exactly one of configMapRef or secretRef must be set.
+// +kubebuilder:validation:XValidation:rule="(has(self.configMapRef) && !has(self.secretRef)) || (!has(self.configMapRef) && has(self.secretRef))",message="exactly one of configMapRef or secretRef must be set"
+type K8sConfigSpec struct {
+	// Name is the name of the resource in the Concourse pipeline.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=100
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
+	Name string `json:"name"`
+
+	// ConfigMapRef references a ConfigMap in the pipeline's namespace.
+	// +optional
+	ConfigMapRef *LocalObjectReference `json:"configMapRef,omitempty"`
+
+	// SecretRef references a Secret in the pipeline's namespace.
+	// +optional
+	SecretRef *LocalObjectReference `json:"secretRef,omitempty"`
+
+	// Trigger configures whether changes to this ConfigMap/Secret trigger dependent jobs.
+	// +optional
+	// +kubebuilder:default=false
+	Trigger bool `json:"trigger,omitempty"`
+}
