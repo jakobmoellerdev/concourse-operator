@@ -501,6 +501,93 @@ var _ = Describe("Controller Integration", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(found).To(BeFalse(), "pipeline should be gone from Concourse after CR deletion")
 		})
+
+		It("applies a pipeline with k8sConfigs auto-wiring to live Concourse", func() {
+			const plName = "ctrl-integ-pl-k8scfg"
+
+			pl := &concoursev1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: plName, Namespace: "default"},
+				Spec: concoursev1alpha1.PipelineSpec{
+					TeamRef: concoursev1alpha1.LocalObjectReference{Name: teamName},
+					K8sConfigImage: &concoursev1alpha1.ContainerImageSpec{
+						Repository: "ghcr.io/jakobmoellerdev/concourse-k8s-config-resource",
+						Tag:        "v0.1.0",
+					},
+					K8sConfigs: []concoursev1alpha1.K8sConfigSpec{
+						{
+							Name:         "live-app-config",
+							ConfigMapRef: &concoursev1alpha1.LocalObjectReference{Name: "live-cm"},
+							Trigger:      true,
+						},
+						{
+							Name:      "live-app-secret",
+							SecretRef: &concoursev1alpha1.LocalObjectReference{Name: "live-sec"},
+						},
+					},
+					Config: concoursev1alpha1.PipelineConfig{
+						Inline: `jobs:
+- name: test-job
+  plan:
+  - get: live-app-config
+    trigger: true
+  - get: live-app-secret`,
+					},
+				},
+			}
+			Expect(k8s.Create(ctx, pl)).To(Succeed())
+			plNSN := types.NamespacedName{Name: plName, Namespace: "default"}
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Pipeline{}
+				if err := k8s.Get(ctx, plNSN, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, pipelineFinalizer)
+					_ = k8s.Update(ctx, latest)
+					_ = k8s.Delete(ctx, latest)
+				}
+				_, _ = concourseClient.Team(teamName).DeletePipeline(atc.PipelineRef{Name: plName})
+			})
+
+			reconcilePipeline(ctx, k8s, cache, plName)
+
+			By("Checking Concourse ATC received the rendered config with k8s-config resource type and resources")
+			cfg, _, found, err := concourseClient.Team(teamName).PipelineConfig(atc.PipelineRef{Name: plName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+
+			// 1. Verify resource type was injected into Concourse
+			var foundRT *atc.ResourceType
+			for i, rt := range cfg.ResourceTypes {
+				if rt.Name == "k8s-config" {
+					foundRT = &cfg.ResourceTypes[i]
+					break
+				}
+			}
+			Expect(foundRT).NotTo(BeNil())
+			Expect(foundRT.Type).To(Equal("registry-image"))
+			Expect(foundRT.Source["repository"]).To(Equal("ghcr.io/jakobmoellerdev/concourse-k8s-config-resource"))
+			Expect(foundRT.Source["tag"]).To(Equal("v0.1.0"))
+
+			// 2. Verify ConfigMap and Secret resources were injected into Concourse
+			var foundCM, foundSec *atc.ResourceConfig
+			for i, res := range cfg.Resources {
+				if res.Name == "live-app-config" {
+					foundCM = &cfg.Resources[i]
+				}
+				if res.Name == "live-app-secret" {
+					foundSec = &cfg.Resources[i]
+				}
+			}
+			Expect(foundCM).NotTo(BeNil())
+			Expect(foundCM.Type).To(Equal("k8s-config"))
+			Expect(foundCM.Source["kind"]).To(Equal("ConfigMap"))
+			Expect(foundCM.Source["name"]).To(Equal("live-cm"))
+			Expect(foundCM.Source["namespace"]).To(Equal("default"))
+
+			Expect(foundSec).NotTo(BeNil())
+			Expect(foundSec.Type).To(Equal("k8s-config"))
+			Expect(foundSec.Source["kind"]).To(Equal("Secret"))
+			Expect(foundSec.Source["name"]).To(Equal("live-sec"))
+			Expect(foundSec.Source["namespace"]).To(Equal("default"))
+		})
 	})
 
 	// -----------------------------------------------------------------------
