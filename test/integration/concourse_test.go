@@ -33,7 +33,7 @@ var _ = Describe("Concourse Integration", func() {
 		It("connects and gets server info", func() {
 			info, err := concourseClient.GetInfo()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(info.Version).To(Equal("8.2.1"))
+			Expect(info.Version).To(Equal("8.3.0"))
 			Expect(info.ClusterName).To(Equal("tutorial"))
 		})
 
