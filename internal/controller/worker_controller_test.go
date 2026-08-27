@@ -50,9 +50,9 @@ var _ = Describe("Worker Controller", func() {
 						Namespace: "default",
 					},
 					Spec: concoursev1alpha1.WorkerSpec{
-						InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: "test-instance"},
-						WorkerName:   "worker-1",
-						DesiredState: concoursev1alpha1.WorkerDesiredStateActive,
+						InstanceRef: concoursev1alpha1.LocalObjectReference{Name: "test-instance"},
+						WorkerName:  "worker-1",
+						Lifecycle:   concoursev1alpha1.WorkerLifecycleRunning,
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -84,7 +84,7 @@ var _ = Describe("Worker Controller", func() {
 			By("Creating an instance without Ready condition")
 			notReadyInst := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "worker-instance-not-ready", Namespace: "default"},
-				Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+				Spec:       testInstanceSpec(),
 			}
 			Expect(k8sClient.Create(ctx, notReadyInst)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, notReadyInst) })
@@ -93,9 +93,9 @@ var _ = Describe("Worker Controller", func() {
 			notReadyWorker := &concoursev1alpha1.Worker{
 				ObjectMeta: metav1.ObjectMeta{Name: "worker-instance-check", Namespace: "default"},
 				Spec: concoursev1alpha1.WorkerSpec{
-					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: "worker-instance-not-ready"},
-					WorkerName:   "worker-1",
-					DesiredState: concoursev1alpha1.WorkerDesiredStateActive,
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: "worker-instance-not-ready"},
+					WorkerName:  "worker-1",
+					Lifecycle:   concoursev1alpha1.WorkerLifecycleRunning,
 				},
 			}
 			Expect(k8sClient.Create(ctx, notReadyWorker)).To(Succeed())
@@ -125,7 +125,7 @@ var _ = Describe("Worker Controller", func() {
 	Context("When Concourse API responds successfully", func() {
 		ctx := context.Background()
 
-		It("should sync worker status from ListWorkers when DesiredState=active", func() {
+		It("should sync worker status from ListWorkers when Lifecycle=Running", func() {
 			By("Setting up a ready instance with a fake client that returns a known worker")
 			cache := concourse.NewCache()
 			fake := &fakeClient{
@@ -150,9 +150,9 @@ var _ = Describe("Worker Controller", func() {
 			wk := &concoursev1alpha1.Worker{
 				ObjectMeta: metav1.ObjectMeta{Name: "worker-status", Namespace: "default"},
 				Spec: concoursev1alpha1.WorkerSpec{
-					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
-					WorkerName:   "worker-a",
-					DesiredState: concoursev1alpha1.WorkerDesiredStateActive,
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:  "worker-a",
+					Lifecycle:   concoursev1alpha1.WorkerLifecycleRunning,
 				},
 			}
 			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
@@ -171,17 +171,19 @@ var _ = Describe("Worker Controller", func() {
 			By("Verifying status fields are synced from Concourse")
 			fetched := &concoursev1alpha1.Worker{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
-			Expect(fetched.Status.ActualState).To(Equal("running"))
+			Expect(fetched.Status.Phase).To(Equal(concoursev1alpha1.WorkerPhaseRunning))
 			Expect(fetched.Status.Platform).To(Equal("linux"))
 			Expect(fetched.Status.Tags).To(ConsistOf("tag1"))
-			Expect(fetched.Status.ActiveContainers).To(Equal(3))
-			Expect(fetched.Status.ActiveVolumes).To(Equal(7))
+			Expect(fetched.Status.ActiveContainers).NotTo(BeNil())
+			Expect(*fetched.Status.ActiveContainers).To(Equal(int32(3)))
+			Expect(fetched.Status.ActiveVolumes).NotTo(BeNil())
+			Expect(*fetched.Status.ActiveVolumes).To(Equal(int32(7)))
 			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 		})
 
-		It("should call LandWorker when DesiredState=land", func() {
+		It("should call LandWorker when Lifecycle=Draining", func() {
 			cache := concourse.NewCache()
 			landCalled := false
 			fake := &fakeClient{
@@ -200,9 +202,9 @@ var _ = Describe("Worker Controller", func() {
 			wk := &concoursev1alpha1.Worker{
 				ObjectMeta: metav1.ObjectMeta{Name: "worker-land-cr", Namespace: "default"},
 				Spec: concoursev1alpha1.WorkerSpec{
-					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
-					WorkerName:   "worker-land",
-					DesiredState: concoursev1alpha1.WorkerDesiredStateLand,
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:  "worker-land",
+					Lifecycle:   concoursev1alpha1.WorkerLifecycleDraining,
 				},
 			}
 			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
@@ -219,7 +221,7 @@ var _ = Describe("Worker Controller", func() {
 			Expect(landCalled).To(BeTrue(), "expected LandWorker to be called")
 		})
 
-		It("should call PruneWorker when DesiredState=prune", func() {
+		It("should call PruneWorker when Lifecycle=Removed", func() {
 			cache := concourse.NewCache()
 			pruneCalled := false
 			fake := &fakeClient{
@@ -238,9 +240,9 @@ var _ = Describe("Worker Controller", func() {
 			wk := &concoursev1alpha1.Worker{
 				ObjectMeta: metav1.ObjectMeta{Name: "worker-prune-cr", Namespace: "default"},
 				Spec: concoursev1alpha1.WorkerSpec{
-					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
-					WorkerName:   "worker-prune",
-					DesiredState: concoursev1alpha1.WorkerDesiredStatePrune,
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:  "worker-prune",
+					Lifecycle:   concoursev1alpha1.WorkerLifecycleRemoved,
 				},
 			}
 			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
@@ -257,7 +259,7 @@ var _ = Describe("Worker Controller", func() {
 			Expect(pruneCalled).To(BeTrue(), "expected PruneWorker to be called")
 		})
 
-		It("should leave status.ActualState empty when worker not found in ListWorkers", func() {
+		It("should set phase=missing when worker not found in ListWorkers", func() {
 			cache := concourse.NewCache()
 			fake := &fakeClient{
 				team:      &fakeTeam{name: "main"},
@@ -272,9 +274,9 @@ var _ = Describe("Worker Controller", func() {
 			wk := &concoursev1alpha1.Worker{
 				ObjectMeta: metav1.ObjectMeta{Name: "worker-notfound-cr", Namespace: "default"},
 				Spec: concoursev1alpha1.WorkerSpec{
-					InstanceRef:  concoursev1alpha1.LocalObjectReference{Name: inst.Name},
-					WorkerName:   "worker-missing",
-					DesiredState: concoursev1alpha1.WorkerDesiredStateActive,
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					WorkerName:  "worker-missing",
+					Lifecycle:   concoursev1alpha1.WorkerLifecycleRunning,
 				},
 			}
 			Expect(k8sClient.Create(ctx, wk)).To(Succeed())
@@ -291,7 +293,7 @@ var _ = Describe("Worker Controller", func() {
 
 			fetched := &concoursev1alpha1.Worker{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
-			Expect(fetched.Status.ActualState).To(BeEmpty(), "worker not found in list should leave ActualState empty")
+			Expect(fetched.Status.Phase).To(Equal(concoursev1alpha1.WorkerPhaseMissing))
 		})
 	})
 })

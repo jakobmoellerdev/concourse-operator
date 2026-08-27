@@ -7,9 +7,10 @@ metadata:
   name: instance-sample
 spec:
   url: http://localhost:8080
-  basicAuth:
-    username: test
-    passwordRef:
-      name: concourse-local-credentials
-      key: password
-  interval: 5m
+  auth:
+    password:
+      username: test
+      passwordRef:
+        name: concourse-local-credentials
+        key: password
+  healthProbeInterval: 5m

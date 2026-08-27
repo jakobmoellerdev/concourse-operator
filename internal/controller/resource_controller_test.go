@@ -226,5 +226,56 @@ var _ = Describe("Resource Controller", func() {
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
 			Expect(fetched.Status.LatestVersion).To(Equal(map[string]string{"ref": "deadbeef"}))
 		})
+
+		It("should pin a matching resource version", func() {
+			cache := concourse.NewCache()
+			pinCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "res3-team",
+					resourceFn: func(_ atc.PipelineRef, name string) (atc.Resource, bool, error) {
+						return atc.Resource{Name: name}, true, nil
+					},
+					resourceVersionsFn: func(_ atc.PipelineRef, _ string, _ goconcourse.Page, _ atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error) {
+						return []atc.ResourceVersion{{ID: 9, Version: atc.Version{"ref": "abc"}}}, goconcourse.Pagination{}, true, nil
+					},
+					pinResourceVersionFn: func(_ atc.PipelineRef, _ string, id int) (bool, error) {
+						pinCalled = true
+						Expect(id).To(Equal(9))
+						return true, nil
+					},
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "res3-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "res3-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "res3-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			cr := &concoursev1alpha1.Resource{
+				ObjectMeta: metav1.ObjectMeta{Name: "res-pin", Namespace: "default"},
+				Spec: concoursev1alpha1.ResourceSpec{
+					PipelineRef:   concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					ResourceName:  "my-git",
+					PinnedVersion: map[string]string{"ref": "abc"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			reconciler := &ResourceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Cache: cache}
+			nsn := types.NamespacedName{Name: "res-pin", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pinCalled).To(BeTrue())
+
+			fetched := &concoursev1alpha1.Resource{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.Pinned).NotTo(BeNil())
+			Expect(*fetched.Status.Pinned).To(BeTrue())
+			Expect(fetched.Status.PinnedVersionID).NotTo(BeNil())
+			Expect(*fetched.Status.PinnedVersionID).To(Equal(int32(9)))
+		})
 	})
 })

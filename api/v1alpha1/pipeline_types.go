@@ -5,10 +5,10 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/License-2.0
 
 Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
+distributed under the License is distributed on "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
@@ -20,16 +20,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ConfigMapKeyRef references a key within a ConfigMap.
-type ConfigMapKeyRef struct {
-	// Name of the ConfigMap.
-	Name string `json:"name"`
-	// Key within the ConfigMap.
-	Key string `json:"key"`
-}
-
 // PipelineConfig sources the pipeline YAML configuration.
 // Exactly one of Inline or ConfigMapRef must be set.
+// +kubebuilder:validation:XValidation:rule="(has(self.inline) && size(self.inline) > 0 && !has(self.configMapRef)) || ((!has(self.inline) || size(self.inline) == 0) && has(self.configMapRef))",message="exactly one of inline or configMapRef must be set"
 type PipelineConfig struct {
 	// Inline is the pipeline YAML embedded directly in the spec.
 	// +optional
@@ -41,8 +34,12 @@ type PipelineConfig struct {
 }
 
 // PipelineVar defines a variable passed to fly set-pipeline -v/-l.
+// Exactly one of Value or ValueFrom must be set.
+// +kubebuilder:validation:XValidation:rule="(has(self.value) && size(self.value) > 0 && !has(self.valueFrom)) || ((!has(self.value) || size(self.value) == 0) && has(self.valueFrom))",message="exactly one of value or valueFrom must be set"
 type PipelineVar struct {
 	// Name of the variable.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 	// Value is the plain-text value. Mutually exclusive with ValueFrom.
 	// +optional
@@ -52,7 +49,62 @@ type PipelineVar struct {
 	ValueFrom *SecretKeySelector `json:"valueFrom,omitempty"`
 }
 
+// PipelineJobStatus is the observed state of one job in a pipeline.
+type PipelineJobStatus struct {
+	// Name is the Concourse job name.
+	Name string `json:"name"`
+	// Paused reflects the pause state in Concourse.
+	// +optional
+	Paused bool `json:"paused,omitempty"`
+	// LastBuildStatus is the status of the last finished build, if any.
+	// +optional
+	LastBuildStatus BuildPhase `json:"lastBuildStatus,omitempty"`
+}
+
+// PipelineResourceStatus is the observed state of one resource in a pipeline.
+type PipelineResourceStatus struct {
+	// Name is the Concourse resource name.
+	Name string `json:"name"`
+	// Pinned indicates whether the resource is currently pinned.
+	// +optional
+	Pinned bool `json:"pinned,omitempty"`
+	// Type is the Concourse resource type.
+	// +optional
+	Type string `json:"type,omitempty"`
+}
+
+// PipelineGroupStatus is the observed state of a job group config.
+type PipelineGroupStatus struct {
+	// Name is the group name.
+	Name string `json:"name"`
+	// Jobs is the list of jobs in this group.
+	// +optional
+	// +listType=set
+	Jobs []string `json:"jobs,omitempty"`
+	// Resources is the list of resources in this group.
+	// +optional
+	// +listType=set
+	Resources []string `json:"resources,omitempty"`
+}
+
+// PipelineResourceTypeStatus is the observed custom resource type used in a pipeline.
+type PipelineResourceTypeStatus struct {
+	// Name of the custom resource type.
+	Name string `json:"name"`
+	// Type is the parent type (e.g. docker-image).
+	Type string `json:"type"`
+	// Privileged indicates whether this custom resource type requires privileged containers.
+	// +optional
+	Privileged bool `json:"privileged,omitempty"`
+	// Tags are tags to select workers.
+	// +optional
+	// +listType=set
+	Tags []string `json:"tags,omitempty"`
+}
+
 // PipelineSpec defines the desired state of Pipeline.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.pipelineName) || self.pipelineName == oldSelf.pipelineName",message="pipelineName is immutable"
+// +kubebuilder:validation:XValidation:rule="self.teamRef == oldSelf.teamRef",message="teamRef is immutable"
 type PipelineSpec struct {
 	// TeamRef references the Team this pipeline belongs to.
 	// +kubebuilder:validation:Required
@@ -60,6 +112,9 @@ type PipelineSpec struct {
 
 	// PipelineName is the name in Concourse. Defaults to metadata.name.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=100
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
 	PipelineName string `json:"pipelineName,omitempty"`
 
 	// Config defines the pipeline configuration source.
@@ -77,6 +132,23 @@ type PipelineSpec struct {
 	// Exposed makes the pipeline publicly visible without authentication.
 	// +optional
 	Exposed bool `json:"exposed,omitempty"`
+
+	// ReclaimPolicy controls whether the Concourse pipeline is deleted when this
+	// CR is removed. Defaults to Delete.
+	// +optional
+	// +kubebuilder:default=Delete
+	ReclaimPolicy ReclaimPolicy `json:"reclaimPolicy,omitempty"`
+
+	// Suspend stops all reconciliation activity on this Pipeline.
+	// Existing Concourse state is left untouched.
+	// +optional
+	// +kubebuilder:default=false
+	Suspend bool `json:"suspend,omitempty"`
+
+	// Archived sets whether this pipeline should be archived in Concourse.
+	// +optional
+	// +kubebuilder:default=false
+	Archived bool `json:"archived,omitempty"`
 }
 
 // PipelineStatus defines the observed state of Pipeline.
@@ -88,19 +160,41 @@ type PipelineStatus struct {
 
 	// PipelineID is the Concourse-assigned pipeline ID.
 	// +optional
-	PipelineID int `json:"pipelineID,omitempty"`
+	PipelineID *int32 `json:"pipelineID,omitempty"`
 
-	// ConfigHash is the SHA-256 hash of the last successfully applied pipeline YAML.
+	// ResolvedName is the Concourse pipeline name after defaulting.
+	// +optional
+	ResolvedName string `json:"resolvedName,omitempty"`
+
+	// WebURL is the Concourse UI URL for this pipeline.
+	// +optional
+	// +kubebuilder:validation:Format=uri
+	WebURL string `json:"webURL,omitempty"`
+
+	// ConfigHash is the SHA-256 hash of the last successfully applied pipeline
+	// YAML plus interpolated vars.
 	// +optional
 	ConfigHash string `json:"configHash,omitempty"`
 
-	// Paused reflects the actual pause state in Concourse.
+	// Paused reflects the actual pause state in Concourse. Nil means not yet observed.
 	// +optional
-	Paused bool `json:"paused,omitempty"`
+	Paused *bool `json:"paused,omitempty"`
 
-	// Exposed reflects the actual exposed state in Concourse.
+	// Exposed reflects the actual exposed state in Concourse. Nil means not yet observed.
 	// +optional
-	Exposed bool `json:"exposed,omitempty"`
+	Exposed *bool `json:"exposed,omitempty"`
+
+	// Archived reflects whether the pipeline is archived in Concourse. Nil means not yet observed.
+	// +optional
+	Archived *bool `json:"archived,omitempty"`
+
+	// PausedBy is the user who paused the pipeline, if any.
+	// +optional
+	PausedBy string `json:"pausedBy,omitempty"`
+
+	// PausedAt is when the pipeline was paused, if any.
+	// +optional
+	PausedAt *metav1.Time `json:"pausedAt,omitempty"`
 
 	// LastUpdated is the timestamp when Concourse last recorded a change to this pipeline.
 	// +optional
@@ -108,7 +202,31 @@ type PipelineStatus struct {
 
 	// GroupCount is the number of job groups defined in the pipeline.
 	// +optional
-	GroupCount int `json:"groupCount,omitempty"`
+	GroupCount *int32 `json:"groupCount,omitempty"`
+
+	// Jobs lists jobs observed from the applied pipeline config.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Jobs []PipelineJobStatus `json:"jobs,omitempty"`
+
+	// Resources lists resources observed from the applied pipeline config.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Resources []PipelineResourceStatus `json:"resources,omitempty"`
+
+	// Groups lists job groups defined in Concourse.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Groups []PipelineGroupStatus `json:"groups,omitempty"`
+
+	// ResourceTypes lists custom resource types used by this pipeline.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	ResourceTypes []PipelineResourceTypeStatus `json:"resourceTypes,omitempty"`
 
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional
@@ -117,10 +235,16 @@ type PipelineStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=ccp,categories=concourse
 // +kubebuilder:printcolumn:name="Team",type=string,JSONPath=`.spec.teamRef.name`
-// +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipelineName`
+// +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.status.resolvedName`
 // +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.status.paused`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Exposed",type=boolean,JSONPath=`.status.exposed`,priority=1
+// +kubebuilder:printcolumn:name="Archived",type=boolean,JSONPath=`.status.archived`,priority=1
+// +kubebuilder:printcolumn:name="Synced",type=string,JSONPath=`.status.conditions[?(@.type=="ConfigSynced")].status`,priority=1
+// +kubebuilder:printcolumn:name="WebURL",type=string,JSONPath=`.status.webURL`,priority=1
+// +kubebuilder:printcolumn:name="Suspended",type=boolean,JSONPath=`.spec.suspend`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Pipeline manages a Concourse pipeline configuration.

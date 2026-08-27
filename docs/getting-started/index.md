@@ -9,7 +9,7 @@ This guide takes you from a blank machine to a running Concourse pipeline manage
 ## What you'll need
 
 | Requirement | Notes |
-|-------------|-------|
+| ------------- | ------- |
 | Docker (or compatible OCI runtime) | For running the local Concourse stack |
 | A Kubernetes cluster with `kubectl` configured | [kind](https://kind.sigs.k8s.io/) or [minikube](https://minikube.sigs.k8s.io/) work fine locally |
 | Go 1.24.6+ | Only needed for `make run` (local operator); skip if deploying via image |
@@ -115,12 +115,13 @@ metadata:
   name: local
 spec:
   url: http://localhost:8080
-  basicAuth:
-    username: test
-    passwordRef:
-      name: concourse-local-credentials
-      key: password
-  interval: 1m
+  auth:
+    password:
+      username: test
+      passwordRef:
+        name: concourse-local-credentials
+        key: password
+  healthProbeInterval: 1m
 ```
 
 ```bash
@@ -144,6 +145,8 @@ spec:
   instanceRef:
     name: local
   teamName: main
+  allowDestroy: false
+  reclaimPolicy: Delete
   roles:
     - role: owner
       users:
@@ -168,6 +171,7 @@ spec:
   teamRef:
     name: my-team
   pipelineName: hello-world
+  reclaimPolicy: Delete
   config:
     inline: |
       jobs:
@@ -197,6 +201,8 @@ Open [http://localhost:8080](http://localhost:8080) — the `hello-world` pipeli
 
 ## Step 8: Trigger a build
 
+Jobs do not trigger builds themselves. Create a `Job`, then a `Build` CR:
+
 ```yaml title="job.yaml"
 apiVersion: concourse-ci.org/v1alpha1
 kind: Job
@@ -206,20 +212,30 @@ spec:
   pipelineRef:
     name: hello-world
   jobName: hello
-  triggerBuild: true
+```
+
+```yaml title="build.yaml"
+apiVersion: concourse-ci.org/v1alpha1
+kind: Build
+metadata:
+  name: hello-build
+spec:
+  jobRef:
+    name: hello
 ```
 
 ```bash
 kubectl apply -f job.yaml
+kubectl apply -f build.yaml
 ```
 
-The operator triggers a build and creates a `Build` CR. Watch it complete:
+The operator triggers a Concourse build once. Watch it complete:
 
 ```bash
 kubectl get build --watch
-# NAME              JOB     BUILD-ID   STATUS      AGE
-# hello-build-...   hello   1          started     2s
-# hello-build-...   hello   1          succeeded   14s
+# NAME          JOB     BUILD-ID   STATUS      AGE
+# hello-build   hello   1          started     2s
+# hello-build   hello   1          succeeded   14s
 ```
 
 ---
@@ -236,8 +252,10 @@ All resources should show `READY=True`. The build output is visible in Concourse
 
 ## Teardown
 
+Deleting Team and Pipeline CRs deletes the corresponding Concourse objects unless `reclaimPolicy: Orphan` (this walkthrough uses the default `Delete`). The reserved `main` team is not destroyed unless `allowDestroy: true`.
+
 ```bash
-kubectl delete -f job.yaml -f pipeline.yaml -f team.yaml -f instance.yaml
+kubectl delete -f build.yaml -f job.yaml -f pipeline.yaml -f team.yaml -f instance.yaml
 kubectl delete secret concourse-local-credentials
 make concourse-down
 ```

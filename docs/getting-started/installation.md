@@ -60,7 +60,7 @@ kubectl apply -f dist/install.yaml
 The operator creates three roles per CRD:
 
 | Role suffix | Permissions |
-|-------------|-------------|
+| ------------- | ------------- |
 | `-admin` | Full CRUD + status subresource + finalizers |
 | `-editor` | Create, update, patch (no delete) |
 | `-viewer` | Get, list, watch |
@@ -94,7 +94,7 @@ A `ServiceMonitor` resource is available in `config/prometheus/` for Prometheus 
 
 ```bash
 # Remove all operator-managed CRs first (otherwise finalizers will block)
-kubectl delete concourseinstance,concourseteam,concoursepipeline,concoursejob,concoursebuild,concourseresource,concourseworker --all --all-namespaces
+kubectl delete instance,team,pipeline,job,build,resource,worker --all --all-namespaces
 
 # Remove operator and CRDs
 make undeploy
@@ -102,4 +102,4 @@ make uninstall
 ```
 
 !!! danger "Data loss"
-    Deleting Instance resources triggers finalizers that clean up the client cache. All other CRs are purely declarative — deleting them removes the Kubernetes object but does not delete the corresponding resource from Concourse.
+    Deleting Team and Pipeline CRs **deletes the corresponding Concourse objects** unless `spec.reclaimPolicy` is `Orphan` (default is `Delete`). Destroying the reserved Concourse team named `main` also requires `spec.allowDestroy: true`. Instance deletion only evicts the cached client; Job, Build, Resource, and Worker CRs do not delete their Concourse counterparts on CR removal (Worker `lifecycle: Removed` is the explicit prune path).

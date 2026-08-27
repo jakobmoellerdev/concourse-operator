@@ -1,10 +1,10 @@
 # Authentication
 
-The operator authenticates to Concourse on behalf of each `Instance`. Two authentication methods are supported; they are mutually exclusive.
+The operator authenticates to Concourse on behalf of each `Instance`. Two authentication methods are supported; they are mutually exclusive. Exactly one of `spec.auth.password` or `spec.auth.token` must be set.
 
-## Basic auth
+## Password grant
 
-Username and password. The password is read from a Kubernetes `Secret`.
+Local-user credentials used for an OAuth2 password grant against Concourse's `sky/issuer` token endpoint. The password is read from a Kubernetes `Secret`.
 
 ```yaml
 apiVersion: concourse-ci.org/v1alpha1
@@ -13,11 +13,12 @@ metadata:
   name: my-concourse
 spec:
   url: https://concourse.example.com
-  basicAuth:
-    username: admin
-    passwordRef:
-      name: concourse-credentials   # Secret name
-      key: password                 # Key within the Secret
+  auth:
+    password:
+      username: admin
+      passwordRef:
+        name: concourse-credentials   # Secret name
+        key: password                 # Key within the Secret
 ```
 
 Create the Secret:
@@ -25,6 +26,22 @@ Create the Secret:
 ```bash
 kubectl create secret generic concourse-credentials \
   --from-literal=password=<your-password>
+```
+
+Optional OAuth2 client fields (default to the well-known `fly` client):
+
+```yaml
+spec:
+  auth:
+    password:
+      username: admin
+      passwordRef:
+        name: concourse-credentials
+        key: password
+      clientID: fly
+      clientSecretRef:
+        name: concourse-oauth-client
+        key: secret
 ```
 
 **When to use:** local test environments, or when your Concourse admin account uses local auth.
@@ -42,10 +59,11 @@ metadata:
   name: my-concourse
 spec:
   url: https://concourse.example.com
-  tokenAuth:
-    tokenRef:
-      name: concourse-token
-      key: token
+  auth:
+    token:
+      tokenRef:
+        name: concourse-token
+        key: token
 ```
 
 Create the Secret:
@@ -56,24 +74,25 @@ kubectl create secret generic concourse-token \
 ```
 
 !!! warning "Mutual exclusivity"
-    Setting both `basicAuth` and `tokenAuth` is invalid. The operator will set `Ready=False` with reason `InvalidSpec`.
+    Exactly one of `spec.auth.password` or `spec.auth.token` must be set. Setting both (or neither) is invalid. The operator will set `Ready=False` with reason `InvalidSpec`.
 
 ---
 
 ## TLS configuration
 
-TLS settings are independent of the auth method and can be combined with either.
+TLS settings are independent of the auth method and can be combined with either. `caRef` and `insecureSkipVerify` are mutually exclusive.
 
 ### Custom CA certificate
 
 ```yaml
 spec:
   url: https://concourse.internal
-  basicAuth:
-    username: admin
-    passwordRef:
-      name: concourse-credentials
-      key: password
+  auth:
+    password:
+      username: admin
+      passwordRef:
+        name: concourse-credentials
+        key: password
   tls:
     caRef:
       name: concourse-ca
@@ -100,12 +119,10 @@ spec:
 
 ## Credential rotation
 
-When you update the `Secret` that holds your password or token, the operator does **not** automatically detect the `Secret` change. To trigger a refresh:
+The Instance controller watches Secrets used for auth (`passwordRef`, `tokenRef`, `clientSecretRef`) and TLS (`caRef`). Updating those Secrets triggers a reconcile automatically — you do **not** need to annotate the `Instance`.
 
 1. Update the `Secret` with the new credential.
-2. Annotate or patch the `Instance` to bump its `resourceVersion` (e.g. add/change an annotation).
-
-This evicts the cached client and forces a new client build with the updated credentials.
+2. The controller rebuilds the cached client and records the Secret generation on `status.authSecretGeneration`.
 
 ---
 
@@ -113,5 +130,6 @@ This evicts the cached client and forces a new client build with the updated cre
 
 - Use RBAC to restrict which `ServiceAccounts` can read the credential `Secrets`.
 - Prefer token auth for production — avoids transmitting a password on every reconcile.
-- Mount credential `Secrets` in the operator's namespace only; use `LocalObjectReference` so CRs cannot reference secrets in other namespaces.
+- Auth and TLS Secrets are resolved in the Instance's own namespace (`SecretKeySelector` has `name` + `key` only).
+- Cross-namespace Team/Worker refs are allowed only when `Instance.spec.allowedNamespaces` includes the child's namespace (or `"*"`).
 - Never set `insecureSkipVerify: true` in production deployments.

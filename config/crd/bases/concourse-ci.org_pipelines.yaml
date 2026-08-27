@@ -8,9 +8,13 @@ metadata:
 spec:
   group: concourse-ci.org
   names:
+    categories:
+    - concourse
     kind: Pipeline
     listKind: PipelineList
     plural: pipelines
+    shortNames:
+    - ccp
     singular: pipeline
   scope: Namespaced
   versions:
@@ -18,7 +22,7 @@ spec:
     - jsonPath: .spec.teamRef.name
       name: Team
       type: string
-    - jsonPath: .spec.pipelineName
+    - jsonPath: .status.resolvedName
       name: Pipeline
       type: string
     - jsonPath: .status.paused
@@ -27,6 +31,26 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
+    - jsonPath: .status.exposed
+      name: Exposed
+      priority: 1
+      type: boolean
+    - jsonPath: .status.archived
+      name: Archived
+      priority: 1
+      type: boolean
+    - jsonPath: .status.conditions[?(@.type=="ConfigSynced")].status
+      name: Synced
+      priority: 1
+      type: string
+    - jsonPath: .status.webURL
+      name: WebURL
+      priority: 1
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspended
+      priority: 1
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -55,6 +79,11 @@ spec:
           spec:
             description: PipelineSpec defines the desired state of Pipeline.
             properties:
+              archived:
+                default: false
+                description: Archived sets whether this pipeline should be archived
+                  in Concourse.
+                type: boolean
               config:
                 description: Config defines the pipeline configuration source.
                 properties:
@@ -64,9 +93,11 @@ spec:
                     properties:
                       key:
                         description: Key within the ConfigMap.
+                        minLength: 1
                         type: string
                       name:
                         description: Name of the ConfigMap.
+                        minLength: 1
                         type: string
                     required:
                     - key
@@ -77,6 +108,10 @@ spec:
                       the spec.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one of inline or configMapRef must be set
+                  rule: (has(self.inline) && size(self.inline) > 0 && !has(self.configMapRef))
+                    || ((!has(self.inline) || size(self.inline) == 0) && has(self.configMapRef))
               exposed:
                 description: Exposed makes the pipeline publicly visible without authentication.
                 type: boolean
@@ -85,11 +120,36 @@ spec:
                 type: boolean
               pipelineName:
                 description: PipelineName is the name in Concourse. Defaults to metadata.name.
+                maxLength: 100
+                minLength: 1
+                pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
                 type: string
+              reclaimPolicy:
+                default: Delete
+                description: |-
+                  ReclaimPolicy controls whether the Concourse pipeline is deleted when this
+                  CR is removed. Defaults to Delete.
+                enum:
+                - Delete
+                - Orphan
+                type: string
+              suspend:
+                default: false
+                description: |-
+                  Suspend stops all reconciliation activity on this Pipeline.
+                  Existing Concourse state is left untouched.
+                type: boolean
               teamRef:
                 description: TeamRef references the Team this pipeline belongs to.
                 properties:
                   name:
+                    description: Name of the referent.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the referent. Empty means the same namespace
+                      as the referring object.
+                    minLength: 1
                     type: string
                 required:
                 - name
@@ -97,11 +157,13 @@ spec:
               vars:
                 description: Vars are pipeline variables passed at set-pipeline time.
                 items:
-                  description: PipelineVar defines a variable passed to fly set-pipeline
-                    -v/-l.
+                  description: |-
+                    PipelineVar defines a variable passed to fly set-pipeline -v/-l.
+                    Exactly one of Value or ValueFrom must be set.
                   properties:
                     name:
                       description: Name of the variable.
+                      minLength: 1
                       type: string
                     value:
                       description: Value is the plain-text value. Mutually exclusive
@@ -113,9 +175,11 @@ spec:
                       properties:
                         key:
                           description: Key within the Secret.
+                          minLength: 1
                           type: string
                         name:
                           description: Name of the Secret.
+                          minLength: 1
                           type: string
                       required:
                       - key
@@ -124,14 +188,27 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of value or valueFrom must be set
+                    rule: (has(self.value) && size(self.value) > 0 && !has(self.valueFrom))
+                      || ((!has(self.value) || size(self.value) == 0) && has(self.valueFrom))
                 type: array
             required:
             - config
             - teamRef
             type: object
+            x-kubernetes-validations:
+            - message: pipelineName is immutable
+              rule: '!has(oldSelf.pipelineName) || self.pipelineName == oldSelf.pipelineName'
+            - message: teamRef is immutable
+              rule: self.teamRef == oldSelf.teamRef
           status:
             description: PipelineStatus defines the observed state of Pipeline.
             properties:
+              archived:
+                description: Archived reflects whether the pipeline is archived in
+                  Concourse. Nil means not yet observed.
+                type: boolean
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -192,16 +269,77 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               configHash:
-                description: ConfigHash is the SHA-256 hash of the last successfully
-                  applied pipeline YAML.
+                description: |-
+                  ConfigHash is the SHA-256 hash of the last successfully applied pipeline
+                  YAML plus interpolated vars.
                 type: string
               exposed:
                 description: Exposed reflects the actual exposed state in Concourse.
+                  Nil means not yet observed.
                 type: boolean
               groupCount:
                 description: GroupCount is the number of job groups defined in the
                   pipeline.
+                format: int32
                 type: integer
+              groups:
+                description: Groups lists job groups defined in Concourse.
+                items:
+                  description: PipelineGroupStatus is the observed state of a job
+                    group config.
+                  properties:
+                    jobs:
+                      description: Jobs is the list of jobs in this group.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    name:
+                      description: Name is the group name.
+                      type: string
+                    resources:
+                      description: Resources is the list of resources in this group.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              jobs:
+                description: Jobs lists jobs observed from the applied pipeline config.
+                items:
+                  description: PipelineJobStatus is the observed state of one job
+                    in a pipeline.
+                  properties:
+                    lastBuildStatus:
+                      description: LastBuildStatus is the status of the last finished
+                        build, if any.
+                      enum:
+                      - pending
+                      - started
+                      - succeeded
+                      - failed
+                      - errored
+                      - aborted
+                      type: string
+                    name:
+                      description: Name is the Concourse job name.
+                      type: string
+                    paused:
+                      description: Paused reflects the pause state in Concourse.
+                      type: boolean
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               lastUpdated:
                 description: LastUpdated is the timestamp when Concourse last recorded
                   a change to this pipeline.
@@ -213,10 +351,81 @@ spec:
                 type: integer
               paused:
                 description: Paused reflects the actual pause state in Concourse.
+                  Nil means not yet observed.
                 type: boolean
+              pausedAt:
+                description: PausedAt is when the pipeline was paused, if any.
+                format: date-time
+                type: string
+              pausedBy:
+                description: PausedBy is the user who paused the pipeline, if any.
+                type: string
               pipelineID:
                 description: PipelineID is the Concourse-assigned pipeline ID.
+                format: int32
                 type: integer
+              resolvedName:
+                description: ResolvedName is the Concourse pipeline name after defaulting.
+                type: string
+              resourceTypes:
+                description: ResourceTypes lists custom resource types used by this
+                  pipeline.
+                items:
+                  description: PipelineResourceTypeStatus is the observed custom resource
+                    type used in a pipeline.
+                  properties:
+                    name:
+                      description: Name of the custom resource type.
+                      type: string
+                    privileged:
+                      description: Privileged indicates whether this custom resource
+                        type requires privileged containers.
+                      type: boolean
+                    tags:
+                      description: Tags are tags to select workers.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    type:
+                      description: Type is the parent type (e.g. docker-image).
+                      type: string
+                  required:
+                  - name
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              resources:
+                description: Resources lists resources observed from the applied pipeline
+                  config.
+                items:
+                  description: PipelineResourceStatus is the observed state of one
+                    resource in a pipeline.
+                  properties:
+                    name:
+                      description: Name is the Concourse resource name.
+                      type: string
+                    pinned:
+                      description: Pinned indicates whether the resource is currently
+                        pinned.
+                      type: boolean
+                    type:
+                      description: Type is the Concourse resource type.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              webURL:
+                description: WebURL is the Concourse UI URL for this pipeline.
+                format: uri
+                type: string
             type: object
         required:
         - spec

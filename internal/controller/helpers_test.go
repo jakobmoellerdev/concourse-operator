@@ -29,11 +29,27 @@ import (
 	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
 )
 
+func testInstanceAuth() concoursev1alpha1.InstanceAuth {
+	return concoursev1alpha1.InstanceAuth{
+		Password: &concoursev1alpha1.PasswordGrant{
+			Username:    "test",
+			PasswordRef: concoursev1alpha1.SecretKeySelector{Name: "concourse-local-credentials", Key: "password"},
+		},
+	}
+}
+
+func testInstanceSpec() concoursev1alpha1.InstanceSpec {
+	return concoursev1alpha1.InstanceSpec{
+		URL:  "https://ci.example.com",
+		Auth: testInstanceAuth(),
+	}
+}
+
 // makeReadyInstance creates a Instance with Ready=True status.
 func makeReadyInstance(ctx context.Context, name string) *concoursev1alpha1.Instance {
 	inst := &concoursev1alpha1.Instance{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+		Spec:       testInstanceSpec(),
 	}
 	Expect(k8sClient.Create(ctx, inst)).To(Succeed())
 	inst.Status.Conditions = []metav1.Condition{{

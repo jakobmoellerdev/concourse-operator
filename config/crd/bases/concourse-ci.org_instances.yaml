@@ -8,9 +8,14 @@ metadata:
 spec:
   group: concourse-ci.org
   names:
+    categories:
+    - concourse
     kind: Instance
     listKind: InstanceList
     plural: instances
+    shortNames:
+    - cci
+    - concinst
     singular: instance
   scope: Namespaced
   versions:
@@ -30,6 +35,18 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
+    - jsonPath: .status.webURL
+      name: WebURL
+      priority: 1
+      type: string
+    - jsonPath: .status.clusterName
+      name: Cluster
+      priority: 1
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspended
+      priority: 1
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -58,37 +75,109 @@ spec:
           spec:
             description: InstanceSpec defines the desired state of Instance.
             properties:
-              basicAuth:
+              allowedNamespaces:
                 description: |-
-                  BasicAuth configures username/password authentication.
-                  Mutually exclusive with TokenAuth.
+                  AllowedNamespaces lists namespaces whose Team/Worker CRs may reference this
+                  Instance. Empty means only the Instance's own namespace is allowed.
+                items:
+                  type: string
+                type: array
+              auth:
+                description: Auth configures authentication to the ATC. Required.
                 properties:
-                  passwordRef:
-                    description: PasswordRef references the Secret key containing
-                      the password.
+                  password:
+                    description: Password configures an OAuth2 password grant (local
+                      user).
                     properties:
-                      key:
-                        description: Key within the Secret.
+                      clientID:
+                        description: ClientID is the OAuth2 client ID. Defaults to
+                          the well-known fly client.
                         type: string
-                      name:
-                        description: Name of the Secret.
+                      clientSecretRef:
+                        description: |-
+                          ClientSecretRef references the Secret key containing the OAuth2 client secret.
+                          When unset, the well-known fly client secret is used.
+                        properties:
+                          key:
+                            description: Key within the Secret.
+                            minLength: 1
+                            type: string
+                          name:
+                            description: Name of the Secret.
+                            minLength: 1
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      passwordRef:
+                        description: PasswordRef references the Secret key containing
+                          the password.
+                        properties:
+                          key:
+                            description: Key within the Secret.
+                            minLength: 1
+                            type: string
+                          name:
+                            description: Name of the Secret.
+                            minLength: 1
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      username:
+                        description: Username for the password grant.
+                        minLength: 1
                         type: string
                     required:
-                    - key
-                    - name
+                    - passwordRef
+                    - username
                     type: object
-                  username:
-                    description: Username for basic authentication.
-                    type: string
-                required:
-                - passwordRef
-                - username
+                  token:
+                    description: Token configures bearer token authentication.
+                    properties:
+                      tokenRef:
+                        description: TokenRef references the Secret key containing
+                          the bearer token.
+                        properties:
+                          key:
+                            description: Key within the Secret.
+                            minLength: 1
+                            type: string
+                          name:
+                            description: Name of the Secret.
+                            minLength: 1
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                    required:
+                    - tokenRef
+                    type: object
                 type: object
-              interval:
-                default: 5m
-                description: Interval is how often the controller reconciles this
-                  instance.
+                x-kubernetes-validations:
+                - message: exactly one of password or token must be set
+                  rule: '[has(self.password), has(self.token)].filter(x, x).size()
+                    == 1'
+              defaultTeam:
+                default: main
+                description: DefaultTeam is the default team name to use when not
+                  specified (defaults to "main").
+                pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
                 type: string
+              healthProbeInterval:
+                default: 5m
+                description: HealthProbeInterval is how often the controller probes
+                  this instance.
+                type: string
+              suspend:
+                default: false
+                description: |-
+                  Suspend stops all reconciliation activity on this Instance.
+                  Existing Concourse state is left untouched.
+                type: boolean
               tls:
                 description: TLS configures TLS settings for the connection.
                 properties:
@@ -98,9 +187,11 @@ spec:
                     properties:
                       key:
                         description: Key within the Secret.
+                        minLength: 1
                         type: string
                       name:
                         description: Name of the Secret.
+                        minLength: 1
                         type: string
                     required:
                     - key
@@ -110,38 +201,38 @@ spec:
                     description: InsecureSkipVerify disables TLS certificate verification.
                     type: boolean
                 type: object
-              tokenAuth:
-                description: |-
-                  TokenAuth configures bearer token authentication.
-                  Mutually exclusive with BasicAuth.
-                properties:
-                  tokenRef:
-                    description: TokenRef references the Secret key containing the
-                      bearer token.
-                    properties:
-                      key:
-                        description: Key within the Secret.
-                        type: string
-                      name:
-                        description: Name of the Secret.
-                        type: string
-                    required:
-                    - key
-                    - name
-                    type: object
-                required:
-                - tokenRef
-                type: object
+                x-kubernetes-validations:
+                - message: caRef and insecureSkipVerify are mutually exclusive
+                  rule: '!(has(self.caRef) && self.insecureSkipVerify)'
               url:
                 description: URL is the base URL of the Concourse ATC, e.g. https://ci.example.com.
-                pattern: ^https?://
+                format: uri
+                maxLength: 2048
+                pattern: ^https?://.+
                 type: string
             required:
+            - auth
             - url
             type: object
+            x-kubernetes-validations:
+            - message: healthProbeInterval must be between 30s and 1h
+              rule: '!has(self.healthProbeInterval) || (duration(self.healthProbeInterval)
+                >= duration(''30s'') && duration(self.healthProbeInterval) <= duration(''1h''))'
           status:
             description: InstanceStatus defines the observed state of Instance.
             properties:
+              authSecretGeneration:
+                description: AuthSecretGeneration is the generation of the Secret
+                  last used for auth.
+                format: int64
+                type: integer
+              authenticatedAdmin:
+                description: AuthenticatedAdmin indicates whether the connected user
+                  is a Concourse cluster admin.
+                type: boolean
+              authenticatedUser:
+                description: AuthenticatedUser is the username currently used to connect.
+                type: string
               clusterName:
                 description: ClusterName is the human-readable cluster name reported
                   by Concourse.
@@ -209,24 +300,54 @@ spec:
                 description: ExternalURL is the externally-visible URL reported by
                   the Concourse server.
                 type: string
+              featureFlags:
+                additionalProperties:
+                  type: boolean
+                description: FeatureFlags maps the Concourse server's enabled feature
+                  flags.
+                type: object
+              landingWorkers:
+                description: LandingWorkers is the number of workers in the "landing"
+                  state.
+                format: int32
+                type: integer
               observedGeneration:
                 description: ObservedGeneration is the last generation that was reconciled.
                 format: int64
                 type: integer
+              pipelineCount:
+                description: PipelineCount is the total number of pipelines found
+                  in this Concourse instance.
+                format: int32
+                type: integer
               runningWorkers:
                 description: RunningWorkers is the number of workers in the "running"
                   state.
+                format: int32
                 type: integer
               stalledWorkers:
                 description: StalledWorkers is the number of workers in the "stalled"
                   state.
+                format: int32
+                type: integer
+              teamCount:
+                description: TeamCount is the total number of teams found in this
+                  Concourse instance.
+                format: int32
                 type: integer
               version:
                 description: Version is the Concourse server version string.
                 type: string
+              wallMessage:
+                description: WallMessage is any active cluster-wide notification message.
+                type: string
+              webURL:
+                description: WebURL is the Concourse UI URL for this instance.
+                format: uri
+                type: string
               workerCount:
-                description: WorkerCount is the number of running workers in this
-                  instance.
+                description: WorkerCount is the total number of registered workers.
+                format: int32
                 type: integer
               workerVersion:
                 description: WorkerVersion is the minimum worker binary version required

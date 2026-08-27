@@ -10,4 +10,3 @@ spec:
     name: pipeline-sample
   jobName: hello
   paused: false
-  triggerBuild: false

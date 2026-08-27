@@ -159,7 +159,9 @@ var _ = Describe("Pipeline Controller", func() {
 
 		It("should set Ready=False with reason ConfigLoadFailed when ConfigMap does not exist", func() {
 			By("Creating a ready instance and team chain")
-			inst := makeReadyInstance(ctx, "pipeline-cm-instance")
+			cache := concourse.NewCache()
+			fake := &fakeClient{team: &fakeTeam{name: "main"}}
+			inst := makeReadyInstanceWithFakeClient(ctx, "pipeline-cm-instance", cache, fake)
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
 			team := makeReadyTeam(ctx, "pipeline-cm-team", "pipeline-cm-instance")
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
@@ -180,7 +182,7 @@ var _ = Describe("Pipeline Controller", func() {
 			reconciler := &PipelineReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
-				Cache:  concourse.NewCache(),
+				Cache:  cache,
 			}
 			result, err := reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: "pipeline-missing-cm", Namespace: "default"},
@@ -199,7 +201,9 @@ var _ = Describe("Pipeline Controller", func() {
 
 		It("should set Ready=False with reason ConfigLoadFailed when ConfigMap key is missing", func() {
 			By("Creating a ready instance and team chain")
-			inst := makeReadyInstance(ctx, "pipeline-cm-key-instance")
+			cache := concourse.NewCache()
+			fake := &fakeClient{team: &fakeTeam{name: "main"}}
+			inst := makeReadyInstanceWithFakeClient(ctx, "pipeline-cm-key-instance", cache, fake)
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
 			team := makeReadyTeam(ctx, "pipeline-cm-key-team", "pipeline-cm-key-instance")
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
@@ -228,7 +232,7 @@ var _ = Describe("Pipeline Controller", func() {
 			reconciler := &PipelineReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
-				Cache:  concourse.NewCache(),
+				Cache:  cache,
 			}
 			result, err := reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: "pipeline-bad-key", Namespace: "default"},
@@ -314,7 +318,8 @@ var _ = Describe("Pipeline Controller", func() {
 			fetched := &concoursev1alpha1.Pipeline{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
 			Expect(fetched.Status.ConfigHash).NotTo(BeEmpty())
-			Expect(fetched.Status.PipelineID).To(Equal(7))
+			Expect(fetched.Status.PipelineID).NotTo(BeNil())
+			Expect(*fetched.Status.PipelineID).To(Equal(int32(7)))
 			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -387,7 +392,9 @@ var _ = Describe("Pipeline Controller", func() {
 						return true, false, nil, nil
 					},
 					pausePipelineFn: func(_ atc.PipelineRef) (bool, error) { pauseCalled = true; return true, nil },
-					pipelineFn:      func(_ atc.PipelineRef) (atc.Pipeline, bool, error) { return atc.Pipeline{ID: 9}, true, nil },
+					pipelineFn: func(_ atc.PipelineRef) (atc.Pipeline, bool, error) {
+						return atc.Pipeline{ID: 9, Paused: true}, true, nil
+					},
 				},
 				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
 				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
@@ -427,7 +434,8 @@ var _ = Describe("Pipeline Controller", func() {
 
 			fetched := &concoursev1alpha1.Pipeline{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
-			Expect(fetched.Status.Paused).To(BeTrue())
+			Expect(fetched.Status.Paused).NotTo(BeNil())
+			Expect(*fetched.Status.Paused).To(BeTrue())
 		})
 
 		It("should set Ready=False/SetPipelineFailed when CreateOrUpdatePipelineConfig returns error", func() {

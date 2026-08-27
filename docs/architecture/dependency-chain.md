@@ -27,8 +27,8 @@ graph TD
 Each controller calls a resolver function (defined in `internal/controller/resolver.go`) that walks up the chain:
 
 | Resolver | Walk path |
-|----------|-----------|
-| `resolveClientForTeam` | Team → Instance |
+| ---------- | ----------- |
+| `resolveInstanceForTeam` | Team → Instance |
 | `resolveClientForPipeline` | Pipeline → Team → Instance |
 | `resolveClientForJob` | Job → Pipeline → Team → Instance |
 | `resolveClientForBuild` | Build → Job → Pipeline → Team → Instance |
@@ -39,7 +39,42 @@ If any ancestor is missing or not `Ready`, the resolver returns an error and the
 
 ## Cross-namespace references
 
-All `*Ref` fields use `LocalObjectReference` — they reference resources **in the same namespace**. Cross-namespace references are not supported.
+All `*Ref` fields use `LocalObjectReference` (`name` + optional `namespace`). When `namespace` is empty, the referent is resolved in the referring object's namespace.
+
+Cross-namespace refs are allowed only if `Instance.spec.allowedNamespaces` includes the child's namespace, or contains `"*"`. Empty `allowedNamespaces` means only the Instance's own namespace may reference it.
+
+```yaml
+apiVersion: concourse-ci.org/v1alpha1
+kind: Instance
+metadata:
+  name: shared
+  namespace: concourse
+spec:
+  url: https://ci.example.com
+  auth:
+    token:
+      tokenRef:
+        name: concourse-token
+        key: token
+  allowedNamespaces:
+    - app-team
+    - "*"   # or use * to allow every namespace
+```
+
+```yaml
+apiVersion: concourse-ci.org/v1alpha1
+kind: Team
+metadata:
+  name: app
+  namespace: app-team
+spec:
+  instanceRef:
+    name: shared
+    namespace: concourse
+  teamName: app
+```
+
+Auth and TLS Secrets stay in the Instance's namespace (`SecretKeySelector` has no namespace field).
 
 ## Requeue behavior
 

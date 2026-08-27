@@ -79,34 +79,15 @@ var _ = Describe("Build Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("should set Ready=False with NoJobRef reason when jobRef is nil", func() {
+		It("should reject a Build without jobRef at admission", func() {
 			By("Creating a build with no jobRef")
 			noJobRefBuild := &concoursev1alpha1.Build{
 				ObjectMeta: metav1.ObjectMeta{Name: "build-no-jobref", Namespace: "default"},
 				Spec:       concoursev1alpha1.BuildSpec{},
 			}
-			Expect(k8sClient.Create(ctx, noJobRefBuild)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, noJobRefBuild) })
-
-			reconciler := &BuildReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Cache:  concourse.NewCache(),
-			}
-			result, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: "build-no-jobref", Namespace: "default"},
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// No jobRef: no requeue.
-			Expect(result.RequeueAfter).To(BeZero())
-
-			By("Verifying Ready=False with NoJobRef reason")
-			fetched := &concoursev1alpha1.Build{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "build-no-jobref", Namespace: "default"}, fetched)).To(Succeed())
-			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal("NoJobRef"))
+			err := k8sClient.Create(ctx, noJobRefBuild)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("jobRef is required"))
 		})
 	})
 
@@ -271,7 +252,8 @@ var _ = Describe("Build Controller", func() {
 			By("Verifying BuildID, BuildName, APIURL in status")
 			fetched := &concoursev1alpha1.Build{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
-			Expect(fetched.Status.BuildID).To(Equal(101))
+			Expect(fetched.Status.BuildID).NotTo(BeNil())
+			Expect(*fetched.Status.BuildID).To(Equal(int32(101)))
 			Expect(fetched.Status.BuildName).To(Equal("1"))
 			Expect(fetched.Status.APIURL).To(Equal("/api/v1/builds/101"))
 			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
@@ -335,7 +317,7 @@ var _ = Describe("Build Controller", func() {
 			Expect(fetched.Status.ConcourseStatus).To(Equal(concoursev1alpha1.BuildPhaseSucceeded))
 		})
 
-		It("should call AbortBuild when spec.abort=true", func() {
+		It("should call AbortBuild when spec.canceled=true", func() {
 			cache := concourse.NewCache()
 			abortCalled := false
 			fake := &fakeClient{
@@ -371,8 +353,8 @@ var _ = Describe("Build Controller", func() {
 			buildCR := &concoursev1alpha1.Build{
 				ObjectMeta: metav1.ObjectMeta{Name: "build-abort", Namespace: "default"},
 				Spec: concoursev1alpha1.BuildSpec{
-					JobRef: &concoursev1alpha1.LocalObjectReference{Name: job3.Name},
-					Abort:  true,
+					JobRef:   &concoursev1alpha1.LocalObjectReference{Name: job3.Name},
+					Canceled: true,
 				},
 			}
 			Expect(k8sClient.Create(ctx, buildCR)).To(Succeed())

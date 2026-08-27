@@ -47,7 +47,7 @@ make test-integration
 make concourse-down
 ```
 
-The Concourse instance starts at **http://localhost:8080** with credentials **test / test**.
+The Concourse instance starts at **<http://localhost:8080>** with credentials **test / test**.
 
 ### What `concourse-up` does
 
@@ -68,7 +68,7 @@ The `docker-compose.yml` at the repo root is the canonical [Concourse quick-star
 Key settings baked in:
 
 | Setting | Value |
-|---------|-------|
+| --------- | ------- |
 | URL | `http://localhost:8080` |
 | Username | `test` |
 | Password | `test` |
@@ -82,7 +82,7 @@ Key settings baked in:
 Tests live under `test/integration/` and use the `integration` build tag so they are excluded from the normal `make test` run.
 
 | Test group | What it verifies |
-|------------|-----------------|
+| ------------ | ----------------- |
 | Client connectivity | `GetInfo` returns version `8.2.1`, `ListWorkers` returns at least one worker |
 | Team management | Create a team via `CreateOrUpdate`, list teams, delete team |
 | Pipeline management | Set pipeline config, pause/unpause, delete |
@@ -127,7 +127,7 @@ make run       # run the operator process locally
 kubectl apply -f config/samples/
 ```
 
-The samples reference `concourseinstance-sample` which points at `http://localhost:8080` using the `concourse-local-credentials` secret. They are ordered such that applying the full directory works without conflicts (Instance → Team → Pipeline → Job / Resource / Worker).
+The samples reference `instance-sample` which points at `http://localhost:8080` using the `concourse-local-credentials` secret. They are ordered such that applying the full directory works without conflicts (Instance → Team → Pipeline → Job / Build / Resource / Worker).
 
 ---
 

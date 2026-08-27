@@ -171,57 +171,64 @@ func main() {
 	clientCache := concourse.NewCache()
 
 	if err := (&controller.InstanceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("instance-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "instance")
 		os.Exit(1)
 	}
 	if err := (&controller.TeamReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("team-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "team")
 		os.Exit(1)
 	}
 	if err := (&controller.PipelineReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("pipeline-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pipeline")
 		os.Exit(1)
 	}
 	if err := (&controller.JobReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("job-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "job")
 		os.Exit(1)
 	}
 	if err := (&controller.BuildReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("build-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "build")
 		os.Exit(1)
 	}
 	if err := (&controller.ResourceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("resource-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "resource")
 		os.Exit(1)
 	}
 	if err := (&controller.WorkerReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Cache:  clientCache,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Cache:    clientCache,
+		Recorder: mgr.GetEventRecorderFor("worker-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "worker")
 		os.Exit(1)

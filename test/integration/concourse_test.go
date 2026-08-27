@@ -1,3 +1,5 @@
+//go:build integration
+
 /*
 Copyright 2026.
 
@@ -13,8 +15,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-
-//go:build integration
 
 package integration_test
 
@@ -33,7 +33,7 @@ var _ = Describe("Concourse Integration", func() {
 		It("connects and gets server info", func() {
 			info, err := concourseClient.GetInfo()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(info.Version).To(Equal("8.2.1"))
+			Expect(info.Version).To(Equal("8.3.0"))
 			Expect(info.ClusterName).To(Equal("tutorial"))
 		})
 

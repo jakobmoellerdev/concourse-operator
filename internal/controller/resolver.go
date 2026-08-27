@@ -5,10 +5,10 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/License-2.0
 
 Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
+distributed under the License is distributed on "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
@@ -29,12 +29,30 @@ import (
 	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
 )
 
+func refKey(ns string, ref concoursev1alpha1.LocalObjectReference) client.ObjectKey {
+	return client.ObjectKey{Namespace: ref.ResolveNamespace(ns), Name: ref.Name}
+}
+
+func namespaceAllowed(instance *concoursev1alpha1.Instance, ns string) error {
+	if ns == instance.Namespace {
+		return nil
+	}
+	for _, allowed := range instance.Spec.AllowedNamespaces {
+		if allowed == ns || allowed == "*" {
+			return nil
+		}
+	}
+	return fmt.Errorf("namespace %q is not allowed to reference instance %s/%s", ns, instance.Namespace, instance.Name)
+}
+
 // resolveInstanceForTeam returns the Concourse client for a team.
 func resolveInstanceForTeam(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, team *concoursev1alpha1.Team) (goconcourse.Client, error) {
 	instance := &concoursev1alpha1.Instance{}
-	key := client.ObjectKey{Namespace: team.Namespace, Name: team.Spec.InstanceRef.Name}
-	if err := k8sClient.Get(ctx, key, instance); err != nil {
+	if err := k8sClient.Get(ctx, refKey(team.Namespace, team.Spec.InstanceRef), instance); err != nil {
 		return nil, fmt.Errorf("get instance %s: %w", team.Spec.InstanceRef.Name, err)
+	}
+	if err := namespaceAllowed(instance, team.Namespace); err != nil {
+		return nil, err
 	}
 	if !meta.IsStatusConditionTrue(instance.Status.Conditions, concoursev1alpha1.ConditionReady) {
 		return nil, fmt.Errorf("instance %s is not ready", instance.Name)
@@ -49,8 +67,7 @@ func resolveInstanceForTeam(ctx context.Context, k8sClient client.Client, cache 
 // resolveClientForPipeline returns the Concourse client and team name for a pipeline.
 func resolveClientForPipeline(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, pipeline *concoursev1alpha1.Pipeline) (goconcourse.Client, string, error) {
 	team := &concoursev1alpha1.Team{}
-	key := client.ObjectKey{Namespace: pipeline.Namespace, Name: pipeline.Spec.TeamRef.Name}
-	if err := k8sClient.Get(ctx, key, team); err != nil {
+	if err := k8sClient.Get(ctx, refKey(pipeline.Namespace, pipeline.Spec.TeamRef), team); err != nil {
 		return nil, "", fmt.Errorf("get team %s: %w", pipeline.Spec.TeamRef.Name, err)
 	}
 	if !meta.IsStatusConditionTrue(team.Status.Conditions, concoursev1alpha1.ConditionReady) {
@@ -60,18 +77,13 @@ func resolveClientForPipeline(ctx context.Context, k8sClient client.Client, cach
 	if err != nil {
 		return nil, "", err
 	}
-	teamName := team.Spec.TeamName
-	if teamName == "" {
-		teamName = team.Name
-	}
-	return cl, teamName, nil
+	return cl, concoursev1alpha1.ResolvedTeamName(team), nil
 }
 
 // resolveClientForJob returns the Concourse client, team name, and pipeline name for a job.
 func resolveClientForJob(ctx context.Context, k8sClient client.Client, cache *concourse.Cache, job *concoursev1alpha1.Job) (goconcourse.Client, string, string, error) {
 	pipeline := &concoursev1alpha1.Pipeline{}
-	key := client.ObjectKey{Namespace: job.Namespace, Name: job.Spec.PipelineRef.Name}
-	if err := k8sClient.Get(ctx, key, pipeline); err != nil {
+	if err := k8sClient.Get(ctx, refKey(job.Namespace, job.Spec.PipelineRef), pipeline); err != nil {
 		return nil, "", "", fmt.Errorf("get pipeline %s: %w", job.Spec.PipelineRef.Name, err)
 	}
 	if !meta.IsStatusConditionTrue(pipeline.Status.Conditions, concoursev1alpha1.ConditionReady) {
@@ -81,15 +93,8 @@ func resolveClientForJob(ctx context.Context, k8sClient client.Client, cache *co
 	if err != nil {
 		return nil, "", "", err
 	}
-	pipelineName := pipeline.Spec.PipelineName
-	if pipelineName == "" {
-		pipelineName = pipeline.Name
-	}
-	return cl, teamName, pipelineName, nil
+	return cl, teamName, concoursev1alpha1.ResolvedPipelineName(pipeline), nil
 }
-
-// setCondition updates or appends a condition in the slice (defined in conditions.go).
-// Kept here as documentation — actual implementation is in conditions.go.
 
 // isReady returns true if the Ready condition is true.
 func isReady(conditions []metav1.Condition) bool {

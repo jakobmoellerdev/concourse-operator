@@ -117,7 +117,7 @@ var _ = Describe("Team Controller", func() {
 			By("Creating an instance without Ready condition")
 			inst := &concoursev1alpha1.Instance{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-instance-not-ready", Namespace: "default"},
-				Spec:       concoursev1alpha1.InstanceSpec{URL: "https://ci.example.com"},
+				Spec:       testInstanceSpec(),
 			}
 			Expect(k8sClient.Create(ctx, inst)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
@@ -205,7 +205,8 @@ var _ = Describe("Team Controller", func() {
 			By("Verifying status.TeamID and Ready=True")
 			fetched := &concoursev1alpha1.Team{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
-			Expect(fetched.Status.TeamID).To(Equal(42))
+			Expect(fetched.Status.TeamID).NotTo(BeNil())
+			Expect(*fetched.Status.TeamID).To(Equal(int32(42)))
 			capturedTeam = *fetched
 			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
@@ -260,6 +261,53 @@ var _ = Describe("Team Controller", func() {
 			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(destroyCalled).To(BeTrue(), "expected DestroyTeam to be called during finalization")
+		})
+
+		It("should refuse to destroy the reserved main team without allowDestroy", func() {
+			cache := concourse.NewCache()
+			destroyCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "main",
+					createOrUpdateFn: func(t atc.Team) (atc.Team, bool, bool, []goconcourse.ConfigWarning, error) {
+						return atc.Team{ID: 1, Name: t.Name}, true, false, nil, nil
+					},
+					destroyTeamFn: func(_ string) error {
+						destroyCalled = true
+						return nil
+					},
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "team-main-instance", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+
+			team := &concoursev1alpha1.Team{
+				ObjectMeta: metav1.ObjectMeta{Name: "team-main", Namespace: "default"},
+				Spec: concoursev1alpha1.TeamSpec{
+					InstanceRef: concoursev1alpha1.LocalObjectReference{Name: inst.Name},
+					TeamName:    "main",
+				},
+			}
+			Expect(k8sClient.Create(ctx, team)).To(Succeed())
+
+			reconciler := &TeamReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Cache: cache}
+			nsn := types.NamespacedName{Name: "team-main", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			fetched := &concoursev1alpha1.Team{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, fetched)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(destroyCalled).To(BeFalse(), "DestroyTeam must not run for main without allowDestroy")
+
+			after := &concoursev1alpha1.Team{}
+			Expect(k8sClient.Get(ctx, nsn, after)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(after, teamFinalizer)).To(BeTrue())
+			cond := meta.FindStatusCondition(after.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal("DeleteFailed"))
 		})
 	})
 })

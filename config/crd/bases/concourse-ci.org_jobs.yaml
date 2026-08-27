@@ -8,9 +8,13 @@ metadata:
 spec:
   group: concourse-ci.org
   names:
+    categories:
+    - concourse
     kind: Job
     listKind: JobList
     plural: jobs
+    shortNames:
+    - ccj
     singular: job
   scope: Namespaced
   versions:
@@ -18,7 +22,7 @@ spec:
     - jsonPath: .spec.pipelineRef.name
       name: Pipeline
       type: string
-    - jsonPath: .spec.jobName
+    - jsonPath: .status.resolvedName
       name: Job
       type: string
     - jsonPath: .status.paused
@@ -30,14 +34,27 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
+    - jsonPath: .status.nextBuildStatus
+      name: Next
+      priority: 1
+      type: string
+    - jsonPath: .status.webURL
+      name: WebURL
+      priority: 1
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspended
+      priority: 1
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Job manages a job within a Concourse pipeline (pause/unpause,
-          trigger builds).
+        description: |-
+          Job manages a job within a Concourse pipeline (pause/unpause).
+          Create a Build CR to trigger a new build.
         properties:
           apiVersion:
             description: |-
@@ -59,9 +76,19 @@ spec:
           spec:
             description: JobSpec defines the desired state of Job.
             properties:
+              failedBuildsHistoryLimit:
+                default: 3
+                description: FailedBuildsHistoryLimit is how many failed/errored/aborted
+                  Build CRs to keep.
+                format: int32
+                minimum: 0
+                type: integer
               jobName:
                 description: JobName is the job name within the pipeline. Defaults
                   to metadata.name.
+                maxLength: 100
+                minLength: 1
+                pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
                 type: string
               paused:
                 description: Paused sets whether the job should be paused in Concourse.
@@ -70,18 +97,38 @@ spec:
                 description: PipelineRef references the Pipeline that owns this job.
                 properties:
                   name:
+                    description: Name of the referent.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the referent. Empty means the same namespace
+                      as the referring object.
+                    minLength: 1
                     type: string
                 required:
                 - name
                 type: object
-              triggerBuild:
+              successfulBuildsHistoryLimit:
+                default: 3
+                description: SuccessfulBuildsHistoryLimit is how many succeeded Build
+                  CRs to keep.
+                format: int32
+                minimum: 0
+                type: integer
+              suspend:
+                default: false
                 description: |-
-                  TriggerBuild causes the controller to create a Build CR on
-                  each spec change, triggering a new build.
+                  Suspend stops all reconciliation activity on this Job.
+                  Existing Concourse state is left untouched.
                 type: boolean
             required:
             - pipelineRef
             type: object
+            x-kubernetes-validations:
+            - message: jobName is immutable
+              rule: '!has(oldSelf.jobName) || self.jobName == oldSelf.jobName'
+            - message: pipelineRef is immutable
+              rule: self.pipelineRef == oldSelf.pipelineRef
           status:
             description: JobStatus defines the observed state of Job.
             properties:
@@ -144,9 +191,58 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              disableManualTrigger:
+                description: DisableManualTrigger reflects if manual triggers are
+                  disabled.
+                type: boolean
+              groups:
+                description: Groups lists job groups this job belongs to.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              hasNewInputs:
+                description: HasNewInputs indicates whether this job has unbuilt inputs.
+                type: boolean
+              inputs:
+                description: Inputs lists the input resources defined for this job.
+                items:
+                  description: JobInputStatus represents the status of an input to
+                    a Concourse job.
+                  properties:
+                    name:
+                      description: Name of the input.
+                      type: string
+                    passed:
+                      description: Passed specifies jobs that the version must have
+                        passed.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    resource:
+                      description: Resource used by the input.
+                      type: string
+                    trigger:
+                      description: Trigger indicates whether a new version of the
+                        resource triggers a build.
+                      type: boolean
+                  required:
+                  - name
+                  - resource
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              jobID:
+                description: JobID is the Concourse-internal numeric ID of this job.
+                format: int32
+                type: integer
               lastBuildID:
                 description: LastBuildID is the Concourse ID of the last finished
                   build.
+                format: int32
                 type: integer
               lastBuildStatus:
                 description: LastBuildStatus is the status of the last finished build.
@@ -162,17 +258,68 @@ spec:
                 description: LastBuildTime is when the last finished build ended.
                 format: date-time
                 type: string
+              nextBuildID:
+                description: NextBuildID is the numeric ID of Concourse's next build
+                  (if currently running).
+                format: int32
+                type: integer
               nextBuildName:
-                description: NextBuildName is the name of the next Build CR if one
-                  was created.
+                description: NextBuildName is the name of the most recently created
+                  Build CR.
+                type: string
+              nextBuildStatus:
+                description: NextBuildStatus is the status of the currently running
+                  build (if any).
+                enum:
+                - pending
+                - started
+                - succeeded
+                - failed
+                - errored
+                - aborted
                 type: string
               observedGeneration:
                 description: ObservedGeneration is the last generation that was reconciled.
                 format: int64
                 type: integer
+              outputs:
+                description: Outputs lists the output resources defined for this job.
+                items:
+                  description: JobOutputStatus represents the status of an output
+                    from a Concourse job.
+                  properties:
+                    name:
+                      description: Name of the output.
+                      type: string
+                    resource:
+                      description: Resource updated by the output.
+                      type: string
+                  required:
+                  - name
+                  - resource
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               paused:
                 description: Paused reflects the actual pause state in Concourse.
+                  Nil means not yet observed.
                 type: boolean
+              pausedAt:
+                description: PausedAt is when this job was paused.
+                format: date-time
+                type: string
+              pausedBy:
+                description: PausedBy is the user who paused this job.
+                type: string
+              resolvedName:
+                description: ResolvedName is the Concourse job name after defaulting.
+                type: string
+              webURL:
+                description: WebURL is the Concourse UI URL for this job.
+                format: uri
+                type: string
             type: object
         required:
         - spec
