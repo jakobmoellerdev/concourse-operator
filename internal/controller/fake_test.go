@@ -309,6 +309,9 @@ type fakeClient struct {
 	pruneWorkerFn func(string) error
 	buildFn       func(string) (atc.Build, bool, error)
 	abortBuildFn  func(string) error
+	getWallFn     func() (atc.Wall, error)
+	setWallFn     func(atc.Wall) error
+	clearWallFn   func() error
 }
 
 func (c *fakeClient) URL() string              { return "https://fake-concourse.example.com" }
@@ -387,11 +390,30 @@ func (c *fakeClient) Team(_ string) goconcourse.Team { return c.team }
 
 func (c *fakeClient) UserInfo() (atc.UserInfo, error)                      { return atc.UserInfo{}, nil }
 func (c *fakeClient) ListActiveUsersSince(_ time.Time) ([]atc.User, error) { return nil, nil }
-func (c *fakeClient) GetWall() (atc.Wall, error)                           { return atc.Wall{}, nil }
-func (c *fakeClient) SetWall(_ atc.Wall) error                             { return nil }
-func (c *fakeClient) ClearWall() error                                     { return nil }
-func (c *fakeClient) ListComponents() ([]atc.Component, error)             { return nil, nil }
-func (c *fakeClient) PauseComponent(_ string) error                        { return nil }
-func (c *fakeClient) UnpauseComponent(_ string) error                      { return nil }
-func (c *fakeClient) PauseAllComponents() error                            { return nil }
-func (c *fakeClient) UnpauseAllComponents() error                          { return nil }
+
+func (c *fakeClient) GetWall() (atc.Wall, error) {
+	if c.getWallFn != nil {
+		return c.getWallFn()
+	}
+	return atc.Wall{}, nil
+}
+
+func (c *fakeClient) SetWall(w atc.Wall) error {
+	if c.setWallFn != nil {
+		return c.setWallFn(w)
+	}
+	return nil
+}
+
+func (c *fakeClient) ClearWall() error {
+	if c.clearWallFn != nil {
+		return c.clearWallFn()
+	}
+	return nil
+}
+
+func (c *fakeClient) ListComponents() ([]atc.Component, error) { return nil, nil }
+func (c *fakeClient) PauseComponent(_ string) error            { return nil }
+func (c *fakeClient) UnpauseComponent(_ string) error          { return nil }
+func (c *fakeClient) PauseAllComponents() error                { return nil }
+func (c *fakeClient) UnpauseAllComponents() error              { return nil }

@@ -47,6 +47,10 @@ spec:
       name: Suspended
       priority: 1
       type: boolean
+    - jsonPath: .status.wallMessage
+      name: Wall
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -210,6 +214,26 @@ spec:
                 maxLength: 2048
                 pattern: ^https?://.+
                 type: string
+              wall:
+                description: |-
+                  Wall configures a cluster-wide banner message. When set, the operator
+                  reconciles it via SetWall; when cleared (nil), the operator clears any
+                  wall it previously set.
+                properties:
+                  message:
+                    description: Message is the banner text shown across the Concourse
+                      UI.
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                  ttl:
+                    description: |-
+                      TTL is how long the banner remains active before Concourse expires it
+                      server-side. When unset, the banner does not expire on its own.
+                    type: string
+                required:
+                - message
+                type: object
             required:
             - auth
             - url

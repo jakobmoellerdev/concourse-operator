@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/concourse/concourse/atc"
+	goconcourse "github.com/concourse/concourse/go-concourse/concourse"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -124,11 +126,18 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		instance.Status.AuthenticatedAdmin = new(uinfo.IsAdmin)
 	}
 	if wall, werr := cl.GetWall(); werr == nil && wall.Message != "" {
-		instance.Status.WallMessage = wall.Message
 		setCondition(&instance.Status.Conditions, instance.Generation, "WallActive", metav1.ConditionTrue, "WallSet", wall.Message)
 	} else {
 		setCondition(&instance.Status.Conditions, instance.Generation, "WallActive", metav1.ConditionFalse, "NoWall", "")
 	}
+
+	if result, err := r.syncWall(ctx, cl, instance); err != nil {
+		if err2 := r.Status().Update(ctx, instance); err2 != nil {
+			log.Error(err2, "update status")
+		}
+		return result, nil
+	}
+
 	if teams, terr := cl.ListTeams(); terr == nil {
 		instance.Status.TeamCount = int32Ptr(len(teams))
 	}
@@ -220,6 +229,52 @@ func (r *InstanceReconciler) handleInstanceLifecycle(ctx context.Context, instan
 	}
 
 	return false, nil
+}
+
+// syncWall reconciles the desired wall banner (spec.Wall) against Concourse.
+// It is idempotent: SetWall is only called when the desired message differs
+// from the message the operator last recorded in status.WallMessage, and
+// ClearWall is only called when the spec no longer wants a wall but the
+// operator previously set one. On error it records a Warning event, sets
+// Ready=False (reason WallFailed), and returns a 30s requeue result.
+func (r *InstanceReconciler) syncWall(ctx context.Context, cl goconcourse.Client, instance *concoursev1alpha1.Instance) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if instance.Spec.Wall != nil {
+		if instance.Spec.Wall.Message == instance.Status.WallMessage {
+			return ctrl.Result{}, nil
+		}
+
+		var ttl time.Duration
+		if instance.Spec.Wall.TTL != nil {
+			ttl = instance.Spec.Wall.TTL.Duration
+		}
+
+		if err := cl.SetWall(atc.Wall{Message: instance.Spec.Wall.Message, TTL: ttl}); err != nil {
+			log.Error(err, "Failed to set Concourse wall banner")
+			recordEventf(r.Recorder, instance, corev1.EventTypeWarning, "WallFailed", "Failed to set wall banner: %v", err)
+			setCondition(&instance.Status.Conditions, instance.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "WallFailed", err.Error())
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+
+		instance.Status.WallMessage = instance.Spec.Wall.Message
+		recordEventf(r.Recorder, instance, corev1.EventTypeNormal, "WallSet", "Set wall banner message: %s", instance.Spec.Wall.Message)
+		return ctrl.Result{}, nil
+	}
+
+	if instance.Status.WallMessage != "" {
+		if err := cl.ClearWall(); err != nil {
+			log.Error(err, "Failed to clear Concourse wall banner")
+			recordEventf(r.Recorder, instance, corev1.EventTypeWarning, "WallFailed", "Failed to clear wall banner: %v", err)
+			setCondition(&instance.Status.Conditions, instance.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "WallFailed", err.Error())
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+
+		instance.Status.WallMessage = ""
+		recordEvent(r.Recorder, instance, corev1.EventTypeNormal, "WallCleared", "Cleared wall banner")
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func instanceInterval(instance *concoursev1alpha1.Instance) time.Duration {
