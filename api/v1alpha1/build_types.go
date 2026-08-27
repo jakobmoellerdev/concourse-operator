@@ -48,7 +48,9 @@ const (
 // BuildSpec defines the desired state of Build.
 // Creating a Build with no BuildID triggers a new Concourse build once.
 // Setting BuildID adopts and watches an existing Concourse build.
+// Setting RerunOf creates a new build that reruns a previous build.
 // +kubebuilder:validation:XValidation:rule="has(self.jobRef)",message="jobRef is required"
+// +kubebuilder:validation:XValidation:rule="!(has(self.rerunOf) && has(self.buildID))",message="rerunOf and buildID are mutually exclusive"
 type BuildSpec struct {
 	// JobRef references the Job that this build belongs to.
 	// +optional
@@ -58,6 +60,20 @@ type BuildSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	BuildID *int32 `json:"buildID,omitempty"`
+
+	// RerunOf is the build NAME/number (e.g. "42") of a previous build to
+	// rerun. When set, the controller creates a new build as a rerun of the
+	// referenced build instead of triggering a fresh one. Mutually exclusive
+	// with BuildID.
+	// +optional
+	RerunOf string `json:"rerunOf,omitempty"`
+
+	// Comment sets a comment on the build once it exists. Reconciled
+	// idempotently: only applied when it differs from the last comment
+	// recorded in status.
+	// +optional
+	// +kubebuilder:validation:MaxLength=1024
+	Comment string `json:"comment,omitempty"`
 
 	// Canceled requests abort of a non-terminal build. Ignored once the build
 	// has reached a terminal state.
@@ -136,6 +152,14 @@ type BuildStatus struct {
 	// +listType=map
 	// +listMapKey=name
 	Outputs []BuildIO `json:"outputs,omitempty"`
+
+	// Comment is the comment last applied by the operator to this build.
+	// +optional
+	Comment string `json:"comment,omitempty"`
+
+	// RerunOf reflects the build name/number this build was a rerun of, if any.
+	// +optional
+	RerunOf string `json:"rerunOf,omitempty"`
 }
 
 // +kubebuilder:object:root=true

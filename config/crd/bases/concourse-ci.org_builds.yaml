@@ -77,6 +77,7 @@ spec:
               BuildSpec defines the desired state of Build.
               Creating a Build with no BuildID triggers a new Concourse build once.
               Setting BuildID adopts and watches an existing Concourse build.
+              Setting RerunOf creates a new build that reruns a previous build.
             properties:
               buildID:
                 description: BuildID adopts an existing Concourse build instead of
@@ -89,6 +90,13 @@ spec:
                   Canceled requests abort of a non-terminal build. Ignored once the build
                   has reached a terminal state.
                 type: boolean
+              comment:
+                description: |-
+                  Comment sets a comment on the build once it exists. Reconciled
+                  idempotently: only applied when it differs from the last comment
+                  recorded in status.
+                maxLength: 1024
+                type: string
               jobRef:
                 description: JobRef references the Job that this build belongs to.
                 properties:
@@ -104,6 +112,13 @@ spec:
                 required:
                 - name
                 type: object
+              rerunOf:
+                description: |-
+                  RerunOf is the build NAME/number (e.g. "42") of a previous build to
+                  rerun. When set, the controller creates a new build as a rerun of the
+                  referenced build instead of triggering a fresh one. Mutually exclusive
+                  with BuildID.
+                type: string
               suspend:
                 default: false
                 description: |-
@@ -121,6 +136,8 @@ spec:
             x-kubernetes-validations:
             - message: jobRef is required
               rule: has(self.jobRef)
+            - message: rerunOf and buildID are mutually exclusive
+              rule: '!(has(self.rerunOf) && has(self.buildID))'
           status:
             description: BuildStatus defines the observed state of Build.
             properties:
@@ -133,6 +150,10 @@ spec:
                 type: integer
               buildName:
                 description: BuildName is the display name of the build (e.g. "42").
+                type: string
+              comment:
+                description: Comment is the comment last applied by the operator to
+                  this build.
                 type: string
               concourseStatus:
                 description: ConcourseStatus reflects the current Concourse build
@@ -270,6 +291,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              rerunOf:
+                description: RerunOf reflects the build name/number this build was
+                  a rerun of, if any.
+                type: string
               startTime:
                 description: StartTime is when the build started.
                 format: date-time

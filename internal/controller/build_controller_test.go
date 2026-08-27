@@ -425,5 +425,215 @@ var _ = Describe("Build Controller", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal("TriggerFailed"))
 		})
+
+		It("should call RerunJobBuild instead of CreateJobBuild when spec.rerunOf is set", func() {
+			cache := concourse.NewCache()
+			createCalled := false
+			var rerunOfArg string
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "bc5-team",
+					createJobBuildFn: func(_ atc.PipelineRef, _ string) (atc.Build, error) {
+						createCalled = true
+						return atc.Build{}, fmt.Errorf("CreateJobBuild should not be called when rerunOf is set")
+					},
+					rerunJobBuildFn: func(_ atc.PipelineRef, _ string, buildName string) (atc.Build, error) {
+						rerunOfArg = buildName
+						return atc.Build{ID: 404, Name: "5", APIURL: "/api/v1/builds/404"}, nil
+					},
+				},
+				buildFn:       func(_ string) (atc.Build, bool, error) { return atc.Build{ID: 404, Status: "pending"}, true, nil },
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst5 := makeReadyInstanceWithFakeClient(ctx, "bc5-inst", cache, fake)
+			team5 := makeReadyTeam(ctx, "bc5-team", inst5.Name)
+			pipeline5 := makeReadyPipeline(ctx, "bc5-pipeline", team5.Name)
+			job5 := &concoursev1alpha1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "bc5-job", Namespace: "default"},
+				Spec: concoursev1alpha1.JobSpec{
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: pipeline5.Name},
+					JobName:     "deploy",
+				},
+			}
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, job5)
+				_ = k8sClient.Delete(ctx, pipeline5)
+				_ = k8sClient.Delete(ctx, team5)
+				_ = k8sClient.Delete(ctx, inst5)
+			})
+			Expect(k8sClient.Create(ctx, job5)).To(Succeed())
+
+			buildCR := &concoursev1alpha1.Build{
+				ObjectMeta: metav1.ObjectMeta{Name: "build-rerun", Namespace: "default"},
+				Spec: concoursev1alpha1.BuildSpec{
+					JobRef:  &concoursev1alpha1.LocalObjectReference{Name: job5.Name},
+					RerunOf: "42",
+				},
+			}
+			Expect(k8sClient.Create(ctx, buildCR)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, buildCR) })
+
+			reconciler := &BuildReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "build-rerun", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(createCalled).To(BeFalse(), "CreateJobBuild should not be called when rerunOf is set")
+			Expect(rerunOfArg).To(Equal("42"))
+
+			fetched := &concoursev1alpha1.Build{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.BuildID).NotTo(BeNil())
+			Expect(*fetched.Status.BuildID).To(Equal(int32(404)))
+			Expect(fetched.Status.BuildName).To(Equal("5"))
+			Expect(fetched.Status.RerunOf).To(Equal("42"))
+		})
+
+		It("should set a comment once via SetJobBuildComment and not re-set it when unchanged", func() {
+			cache := concourse.NewCache()
+			commentCalls := 0
+			var lastComment string
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "bc6-team",
+					createJobBuildFn: func(_ atc.PipelineRef, _ string) (atc.Build, error) {
+						return atc.Build{ID: 505, Name: "6"}, nil
+					},
+					setJobBuildCommentFn: func(_ atc.PipelineRef, _ string, _ string, comment string) (bool, error) {
+						commentCalls++
+						lastComment = comment
+						return true, nil
+					},
+				},
+				buildFn:       func(_ string) (atc.Build, bool, error) { return atc.Build{ID: 505, Status: "pending"}, true, nil },
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst6 := makeReadyInstanceWithFakeClient(ctx, "bc6-inst", cache, fake)
+			team6 := makeReadyTeam(ctx, "bc6-team", inst6.Name)
+			pipeline6 := makeReadyPipeline(ctx, "bc6-pipeline", team6.Name)
+			job6 := &concoursev1alpha1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "bc6-job", Namespace: "default"},
+				Spec: concoursev1alpha1.JobSpec{
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: pipeline6.Name},
+					JobName:     "deploy",
+				},
+			}
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, job6)
+				_ = k8sClient.Delete(ctx, pipeline6)
+				_ = k8sClient.Delete(ctx, team6)
+				_ = k8sClient.Delete(ctx, inst6)
+			})
+			Expect(k8sClient.Create(ctx, job6)).To(Succeed())
+
+			buildCR := &concoursev1alpha1.Build{
+				ObjectMeta: metav1.ObjectMeta{Name: "build-comment", Namespace: "default"},
+				Spec: concoursev1alpha1.BuildSpec{
+					JobRef:  &concoursev1alpha1.LocalObjectReference{Name: job6.Name},
+					Comment: "first comment",
+				},
+			}
+			Expect(k8sClient.Create(ctx, buildCR)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, buildCR) })
+
+			reconciler := &BuildReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "build-comment", Namespace: "default"}
+
+			// First reconcile: build gets triggered but has no BuildName yet from
+			// ensureBuildTriggered until observeBuild populates it; comment is set
+			// once BuildName is known.
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(commentCalls).To(Equal(1), "expected SetJobBuildComment to be called exactly once")
+			Expect(lastComment).To(Equal("first comment"))
+
+			fetched := &concoursev1alpha1.Build{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.Comment).To(Equal("first comment"))
+
+			// Second reconcile with the same spec.comment: SetJobBuildComment must
+			// not be called again.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(commentCalls).To(Equal(1), "comment should not be re-set when unchanged")
+		})
+
+		It("should surface SetJobBuildComment failure as a Warning event and Ready=False without discarding the build", func() {
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "bc7-team",
+					createJobBuildFn: func(_ atc.PipelineRef, _ string) (atc.Build, error) {
+						return atc.Build{ID: 606, Name: "7"}, nil
+					},
+					setJobBuildCommentFn: func(_ atc.PipelineRef, _ string, _ string, _ string) (bool, error) {
+						return false, fmt.Errorf("comment rejected")
+					},
+				},
+				buildFn:       func(_ string) (atc.Build, bool, error) { return atc.Build{ID: 606, Status: "pending"}, true, nil },
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+			}
+			inst7 := makeReadyInstanceWithFakeClient(ctx, "bc7-inst", cache, fake)
+			team7 := makeReadyTeam(ctx, "bc7-team", inst7.Name)
+			pipeline7 := makeReadyPipeline(ctx, "bc7-pipeline", team7.Name)
+			job7 := &concoursev1alpha1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "bc7-job", Namespace: "default"},
+				Spec: concoursev1alpha1.JobSpec{
+					PipelineRef: concoursev1alpha1.LocalObjectReference{Name: pipeline7.Name},
+					JobName:     "deploy",
+				},
+			}
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, job7)
+				_ = k8sClient.Delete(ctx, pipeline7)
+				_ = k8sClient.Delete(ctx, team7)
+				_ = k8sClient.Delete(ctx, inst7)
+			})
+			Expect(k8sClient.Create(ctx, job7)).To(Succeed())
+
+			buildCR := &concoursev1alpha1.Build{
+				ObjectMeta: metav1.ObjectMeta{Name: "build-comment-err", Namespace: "default"},
+				Spec: concoursev1alpha1.BuildSpec{
+					JobRef:  &concoursev1alpha1.LocalObjectReference{Name: job7.Name},
+					Comment: "will fail",
+				},
+			}
+			Expect(k8sClient.Create(ctx, buildCR)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, buildCR) })
+
+			reconciler := &BuildReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+			nsn := types.NamespacedName{Name: "build-comment-err", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred(), "a comment failure should not fail the whole reconcile")
+
+			fetched := &concoursev1alpha1.Build{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+
+			// The build itself must still be tracked even though the comment failed.
+			Expect(fetched.Status.BuildID).NotTo(BeNil())
+			Expect(*fetched.Status.BuildID).To(Equal(int32(606)))
+			Expect(fetched.Status.Comment).To(BeEmpty(), "comment must not be recorded on failure")
+
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("CommentFailed"))
+		})
 	})
 })

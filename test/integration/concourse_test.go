@@ -299,5 +299,48 @@ jobs:
 			Expect(found).To(BeTrue())
 			Expect(fetchedBuild.ID).To(Equal(build.ID))
 		})
+
+		It("reruns a job build", func() {
+			team := concourseClient.Team(testTeamName)
+			pipelineRef := atc.PipelineRef{Name: testPipelineName}
+
+			build, err := team.CreateJobBuild(pipelineRef, testJobName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(build.Name).NotTo(BeEmpty())
+
+			rerun, err := team.RerunJobBuild(pipelineRef, testJobName, build.Name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rerun.ID).NotTo(BeZero())
+			Expect(rerun.ID).NotTo(Equal(build.ID))
+			Expect(rerun.JobName).To(Equal(testJobName))
+			GinkgoWriter.Printf("rerun triggered: #%d (%s) reruns build %s\n", rerun.ID, rerun.Name, build.Name)
+		})
+
+		It("sets and updates a build comment", func() {
+			team := concourseClient.Team(testTeamName)
+			pipelineRef := atc.PipelineRef{Name: testPipelineName}
+
+			build, err := team.CreateJobBuild(pipelineRef, testJobName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(build.Name).NotTo(BeEmpty())
+
+			ok, err := team.SetJobBuildComment(pipelineRef, testJobName, build.Name, "first comment")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+
+			fetchedBuild, found, err := concourseClient.Build(fmt.Sprintf("%d", build.ID))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(fetchedBuild.Comment).To(Equal("first comment"))
+
+			ok, err = team.SetJobBuildComment(pipelineRef, testJobName, build.Name, "updated comment")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+
+			fetchedBuild, found, err = concourseClient.Build(fmt.Sprintf("%d", build.ID))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(fetchedBuild.Comment).To(Equal("updated comment"))
+		})
 	})
 })
