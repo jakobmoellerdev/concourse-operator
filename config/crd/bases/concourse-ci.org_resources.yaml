@@ -81,6 +81,18 @@ spec:
                   CheckInterval triggers a Concourse resource check at this interval.
                   When unset, no automatic checks are triggered by the operator.
                 type: string
+              disabledVersions:
+                description: |-
+                  DisabledVersions lists resource versions (as version maps, same shape as
+                  PinnedVersion) that must be disabled in Concourse so they can't be used
+                  as build inputs. The controller resolves each version map to a version ID
+                  and calls DisableResourceVersion. Any version previously disabled by the
+                  operator but no longer listed here is re-enabled.
+                items:
+                  additionalProperties:
+                    type: string
+                  type: object
+                type: array
               pinComment:
                 description: PinComment is an optional comment explaining why the
                   version was pinned.
@@ -193,6 +205,15 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              disabledVersionIDs:
+                description: |-
+                  DisabledVersionIDs are the Concourse resource version IDs currently
+                  disabled by the operator, tracked so versions dropped from
+                  spec.disabledVersions can be re-enabled.
+                items:
+                  format: int32
+                  type: integer
+                type: array
               lastChecked:
                 description: LastChecked is the timestamp of the last resource check.
                 format: date-time
