@@ -17,9 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -55,6 +58,14 @@ type BuildReconciler struct {
 	watchers sync.Map // build CR namespace/name → struct{} sentinel
 	eventCh  chan ctrlevent.TypedGenericEvent[*concoursev1alpha1.Build]
 	Recorder record.EventRecorder
+
+	// setBuildComment sets a comment on a build by ID. It is a struct field so
+	// unit tests can inject a deterministic implementation; when nil the real
+	// HTTP-based setBuildComment is used. The go-concourse SetJobBuildComment
+	// helper cannot be used here: it targets the /builds/:build_id/comment route
+	// but only supplies name-based params, so it always fails with
+	// "missing param :build_id".
+	setBuildComment func(ctx context.Context, cl concourseapi.Client, buildID int, comment string) error
 }
 
 // +kubebuilder:rbac:groups=concourse-ci.org,resources=builds,verbs=get;list;watch;create;update;patch;delete
@@ -132,6 +143,11 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 	}
 
+	commentFailed := false
+	if buildID != 0 {
+		commentFailed = r.reconcileComment(ctx, build, cl, buildID)
+	}
+
 	if build.Status.StartTime != nil && build.Status.EndTime != nil {
 		d := build.Status.EndTime.Sub(build.Status.StartTime.Time)
 		build.Status.Duration = &metav1.Duration{Duration: d}
@@ -146,7 +162,12 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	build.Status.ObservedGeneration = build.Generation
-	setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionTrue, "Tracked", "")
+	// A comment failure keeps Ready=False (already set by reconcileComment) so
+	// the condition surfaces the problem; it does not fail the reconcile or
+	// discard the tracked build.
+	if !commentFailed {
+		setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionTrue, "Tracked", "")
+	}
 
 	if build.Status.ObservedGeneration != build.Generation {
 		recordEventf(r.Recorder, build, corev1.EventTypeNormal, "BuildReconciled", "Build %s is in phase %s", build.Name, build.Status.ConcourseStatus)
@@ -154,6 +175,10 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	if err := r.Status().Update(ctx, build); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
+	}
+
+	if commentFailed {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	if isTerminal(build.Status.ConcourseStatus) {
@@ -185,7 +210,13 @@ func (r *BuildReconciler) ensureBuildTriggered(ctx context.Context, build *conco
 			build.Status.BuildID = build.Spec.BuildID
 			recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Adopted", "Adopted existing Concourse build %d", *build.Spec.BuildID)
 		} else {
-			atcBuild, err := cl.Team(teamName).CreateJobBuild(atc.PipelineRef{Name: pipelineName}, jobName)
+			var atcBuild atc.Build
+			var err error
+			if build.Spec.RerunOf != "" {
+				atcBuild, err = cl.Team(teamName).RerunJobBuild(atc.PipelineRef{Name: pipelineName}, jobName, build.Spec.RerunOf)
+			} else {
+				atcBuild, err = cl.Team(teamName).CreateJobBuild(atc.PipelineRef{Name: pipelineName}, jobName)
+			}
 			if err != nil {
 				recordEventf(r.Recorder, build, corev1.EventTypeWarning, "TriggerFailed", "Failed to trigger Concourse build: %v", err)
 				setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "TriggerFailed", err.Error())
@@ -201,7 +232,12 @@ func (r *BuildReconciler) ensureBuildTriggered(ctx context.Context, build *conco
 				t := metav1.Unix(atcBuild.StartTime, 0)
 				build.Status.StartTime = &t
 			}
-			recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Triggered", "Triggered Concourse build %s", atcBuild.Name)
+			if build.Spec.RerunOf != "" {
+				build.Status.RerunOf = build.Spec.RerunOf
+				recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Triggered", "Triggered Concourse build %s as a rerun of build %s", atcBuild.Name, build.Spec.RerunOf)
+			} else {
+				recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Triggered", "Triggered Concourse build %s", atcBuild.Name)
+			}
 			// CRITICAL: persist the new BuildID to status IMMEDIATELY. If we defer
 			// this to the single Status().Update at the end of Reconcile and that
 			// update loses a conflict (the Build CR was modified concurrently, e.g.
@@ -345,6 +381,81 @@ func (r *BuildReconciler) observeBuild(ctx context.Context, build *concoursev1al
 	return ctrl.Result{}, false
 }
 
+// reconcileComment sets a comment on the build when spec.Comment differs from
+// the last comment recorded in status. It is idempotent: once status.Comment
+// matches spec.Comment, no API call is made. A failure to set the comment does
+// not fail the whole reconcile — it is logged, surfaced as a Warning event, and
+// the Ready condition is set False with reason CommentFailed so the next
+// reconcile retries. Returns true when the comment failed to apply, so the
+// caller can avoid clobbering Ready=False with a later Ready=True update.
+//
+// The comment is set against the /api/v1/builds/:build_id/comment route via
+// r.setBuildComment (a struct field so tests can inject a stub). We cannot use
+// go-concourse's Team.SetJobBuildComment: it points at that same build-id route
+// but only supplies name-based rata params, so it always fails with
+// "missing param :build_id".
+func (r *BuildReconciler) reconcileComment(ctx context.Context, build *concoursev1alpha1.Build, cl concourseapi.Client, buildID int) bool {
+	log := logf.FromContext(ctx)
+
+	if build.Spec.Comment == "" || build.Spec.Comment == build.Status.Comment {
+		return false
+	}
+	if buildID == 0 {
+		return false
+	}
+
+	set := r.setBuildComment
+	if set == nil {
+		set = setBuildComment
+	}
+
+	if err := set(ctx, cl, buildID, build.Spec.Comment); err != nil {
+		log.Error(err, "Failed to set build comment", "buildID", buildID)
+		recordEventf(r.Recorder, build, corev1.EventTypeWarning, "CommentFailed", "Failed to set comment on build %d: %v", buildID, err)
+		setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "CommentFailed", err.Error())
+		return true
+	}
+
+	build.Status.Comment = build.Spec.Comment
+	recordEventf(r.Recorder, build, corev1.EventTypeNormal, "CommentSet", "Set comment on build %d", buildID)
+	return false
+}
+
+// setBuildComment PUTs a comment to /api/v1/builds/:build_id/comment using the
+// Concourse client's authenticated HTTP client. This is the working path for
+// build comments; see reconcileComment for why the go-concourse helper is not
+// usable here.
+func setBuildComment(ctx context.Context, cl concourseapi.Client, buildID int, comment string) error {
+	httpClient := cl.HTTPClient()
+	if httpClient == nil {
+		return fmt.Errorf("no HTTP client available for setting build comment")
+	}
+
+	body, err := json.Marshal(atc.SetBuildCommentBody{Comment: comment})
+	if err != nil {
+		return fmt.Errorf("marshal comment body: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/builds/%d/comment", strings.TrimSuffix(cl.URL(), "/"), buildID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build comment request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("set build comment: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("set build comment: unexpected status %s: %s", resp.Status, strings.TrimSpace(string(snippet)))
+	}
+	return nil
+}
+
 // watchBuildEvents opens an SSE stream for buildID and sends a GenericEvent
 // to r.eventCh as soon as Concourse emits a terminal status event (or on any
 // stream error/EOF). The caller must ensure this runs at most once per Build CR.
@@ -403,6 +514,7 @@ func (r *BuildReconciler) persistBuildTracking(ctx context.Context, build *conco
 	name := build.Status.BuildName
 	apiURL := build.Status.APIURL
 	start := build.Status.StartTime
+	rerunOf := build.Status.RerunOf
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &concoursev1alpha1.Build{}
 		if err := r.Get(ctx, types.NamespacedName{Name: build.Name, Namespace: build.Namespace}, latest); err != nil {
@@ -418,6 +530,7 @@ func (r *BuildReconciler) persistBuildTracking(ctx context.Context, build *conco
 		latest.Status.BuildName = name
 		latest.Status.APIURL = apiURL
 		latest.Status.StartTime = start
+		latest.Status.RerunOf = rerunOf
 		if err := r.Status().Update(ctx, latest); err != nil {
 			return err
 		}

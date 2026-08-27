@@ -42,6 +42,8 @@ type fakeTeam struct {
 	pauseJobFn                     func(atc.PipelineRef, string) (bool, error)
 	unpauseJobFn                   func(atc.PipelineRef, string) (bool, error)
 	createJobBuildFn               func(atc.PipelineRef, string) (atc.Build, error)
+	rerunJobBuildFn                func(atc.PipelineRef, string, string) (atc.Build, error)
+	setJobBuildCommentFn           func(atc.PipelineRef, string, string, string) (bool, error)
 	checkResourceFn                func(atc.PipelineRef, string, atc.Version, bool) (atc.Build, bool, error)
 	resourceVersionsFn             func(atc.PipelineRef, string, goconcourse.Page, atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error)
 	jobFn                          func(atc.PipelineRef, string) (atc.Job, bool, error)
@@ -170,12 +172,18 @@ func (t *fakeTeam) CreateJobBuild(ref atc.PipelineRef, jobName string) (atc.Buil
 	panic("fakeTeam.CreateJobBuild not configured")
 }
 
-func (t *fakeTeam) RerunJobBuild(_ atc.PipelineRef, _, _ string) (atc.Build, error) {
-	return atc.Build{}, nil
+func (t *fakeTeam) RerunJobBuild(ref atc.PipelineRef, jobName, buildName string) (atc.Build, error) {
+	if t.rerunJobBuildFn != nil {
+		return t.rerunJobBuildFn(ref, jobName, buildName)
+	}
+	panic("fakeTeam.RerunJobBuild not configured")
 }
 
-func (t *fakeTeam) SetJobBuildComment(_ atc.PipelineRef, _, _, _ string) (bool, error) {
-	return false, nil
+func (t *fakeTeam) SetJobBuildComment(ref atc.PipelineRef, jobName, buildName, comment string) (bool, error) {
+	if t.setJobBuildCommentFn != nil {
+		return t.setJobBuildCommentFn(ref, jobName, buildName, comment)
+	}
+	panic("fakeTeam.SetJobBuildComment not configured")
 }
 
 func (t *fakeTeam) ListJobs(_ atc.PipelineRef) ([]atc.Job, error)         { return nil, nil }
