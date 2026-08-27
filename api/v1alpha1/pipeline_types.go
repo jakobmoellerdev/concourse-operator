@@ -22,7 +22,7 @@ import (
 
 // PipelineConfig sources the pipeline YAML configuration.
 // Exactly one of Inline or ConfigMapRef must be set.
-// +kubebuilder:validation:XValidation:rule="(has(self.inline) && self.inline != '' && !has(self.configMapRef)) || ((!has(self.inline) || self.inline == '') && has(self.configMapRef))",message="exactly one of inline or configMapRef must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.inline) && size(self.inline) > 0 && !has(self.configMapRef)) || ((!has(self.inline) || size(self.inline) == 0) && has(self.configMapRef))",message="exactly one of inline or configMapRef must be set"
 type PipelineConfig struct {
 	// Inline is the pipeline YAML embedded directly in the spec.
 	// +optional
@@ -35,7 +35,7 @@ type PipelineConfig struct {
 
 // PipelineVar defines a variable passed to fly set-pipeline -v/-l.
 // Exactly one of Value or ValueFrom must be set.
-// +kubebuilder:validation:XValidation:rule="(has(self.value) && self.value != '' && !has(self.valueFrom)) || ((!has(self.value) || self.value == '') && has(self.valueFrom))",message="exactly one of value or valueFrom must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.value) && size(self.value) > 0 && !has(self.valueFrom)) || ((!has(self.value) || size(self.value) == 0) && has(self.valueFrom))",message="exactly one of value or valueFrom must be set"
 type PipelineVar struct {
 	// Name of the variable.
 	// +kubebuilder:validation:Required

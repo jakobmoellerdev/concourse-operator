@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/concourse/concourse/atc"
+	concourseapi "github.com/concourse/concourse/go-concourse/concourse"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -64,33 +65,8 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if pipeline.Spec.Suspend {
-		log.Info("Reconciliation is suspended for Pipeline", "name", pipeline.Name)
-		setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
-		if err := r.Status().Update(ctx, pipeline); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !pipeline.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(pipeline, pipelineFinalizer) {
-			if err := r.deletePipeline(ctx, pipeline); err != nil {
-				log.Error(err, "delete pipeline from Concourse")
-			}
-			controllerutil.RemoveFinalizer(pipeline, pipelineFinalizer)
-			if err := r.Update(ctx, pipeline); err != nil {
-				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
-			}
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !controllerutil.ContainsFinalizer(pipeline, pipelineFinalizer) {
-		controllerutil.AddFinalizer(pipeline, pipelineFinalizer)
-		if err := r.Update(ctx, pipeline); err != nil {
-			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
-		}
+	if handled, err := r.handlePipelineLifecycle(ctx, pipeline); handled {
+		return ctrl.Result{}, err
 	}
 
 	// Ensure owner reference is set if same namespace
@@ -151,63 +127,49 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	concourseTeam := cl.Team(teamName)
 	pipelineRef := atc.PipelineRef{Name: pipelineName}
 
-	if pipeline.Status.ConfigHash != newHash || pipeline.Status.PipelineID == nil {
-		// Optimistic-concurrency: Concourse set-config requires the CURRENT
-		// config version as a token (X-Concourse-Config-Version). Passing an
-		// empty token makes the ATC unable to reconcile and it rejects the
-		// save with "comparison with existing config failed during save".
-		// Fetch the current version first (empty for a brand-new pipeline),
-		// then set-config with it.
-		currentVersion := func() string {
-			if _, v, found, cfgErr := concourseTeam.PipelineConfig(pipelineRef); cfgErr == nil && found {
-				return v
-			}
-			return ""
-		}
-		_, _, warnings, err := concourseTeam.CreateOrUpdatePipelineConfig(pipelineRef, currentVersion(), yamlBytes, false)
-		// A version mismatch (another writer advanced the config between our
-		// fetch and write) surfaces as the comparison error. Re-fetch the
-		// version and retry ONCE; a persistent failure then surfaces as
-		// SetPipelineFailed rather than looping.
-		if err != nil && isConfigComparisonError(err) {
-			log.Info("pipeline set-config version raced; re-fetching config version and retrying", "pipeline", pipelineRef.String())
-			_, _, warnings, err = concourseTeam.CreateOrUpdatePipelineConfig(pipelineRef, currentVersion(), yamlBytes, false)
-		}
-		if err != nil {
-			recordEventf(r.Recorder, pipeline, corev1.EventTypeWarning, "SetPipelineFailed", "Failed to update pipeline config: %v", err)
-			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigSynced, metav1.ConditionFalse, "SetPipelineFailed", err.Error())
-			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "SetPipelineFailed", err.Error())
-			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
-				log.Error(err2, "update status")
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
-		if len(warnings) > 0 {
-			recordEventf(r.Recorder, pipeline, corev1.EventTypeWarning, "HasWarnings", "Pipeline config updated with %d warning(s)", len(warnings))
-			log.Info("pipeline config warnings", "warnings", warnings)
-			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionTrue, "HasWarnings",
-				fmt.Sprintf("%d warning(s): %s", len(warnings), warnings[0].Message))
-		} else {
-			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionFalse, "NoWarnings", "")
-		}
-		setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigSynced, metav1.ConditionTrue, "Synced", "")
-		pipeline.Status.ConfigHash = newHash
+	if handled, res := r.syncPipelineConfig(ctx, pipeline, concourseTeam, pipelineRef, yamlBytes, newHash); handled {
+		return res, nil
 	}
 
 	// Archive state
+	if handled, res, err := r.applyPipelineState(ctx, pipeline, concourseTeam, pipelineRef); handled {
+		return res, err
+	}
+
+	r.observePipeline(pipeline, cl, concourseTeam, teamName, pipelineRef)
+
+	pipeline.Status.ObservedGeneration = pipeline.Generation
+	setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionTrue, "Ready", "")
+
+	if pipeline.Status.ObservedGeneration != pipeline.Generation {
+		recordEventf(r.Recorder, pipeline, corev1.EventTypeNormal, "ConfigSynced", "Pipeline %q synchronized successfully", pipelineName)
+	}
+
+	if err := r.Status().Update(ctx, pipeline); err != nil {
+		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
+	}
+	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+}
+
+// applyPipelineState reconciles the archived/paused/exposed spec fields against
+// Concourse. It returns handled=true when the caller should return the provided
+// result immediately.
+func (r *PipelineReconciler) applyPipelineState(ctx context.Context, pipeline *concoursev1alpha1.Pipeline, concourseTeam concourseapi.Team, pipelineRef atc.PipelineRef) (bool, ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
 	if pipeline.Spec.Archived {
 		if _, err := concourseTeam.ArchivePipeline(pipelineRef); err != nil {
 			log.Error(err, "archive pipeline")
 			recordEventf(r.Recorder, pipeline, corev1.EventTypeWarning, "ArchiveFailed", "Failed to archive pipeline: %v", err)
 			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "ArchiveFailed", err.Error())
 			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
-				return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+				return true, ctrl.Result{}, fmt.Errorf("update status: %w", err2)
 			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		pipeline.Status.Archived = boolPtr(true)
+		pipeline.Status.Archived = new(true)
 	} else {
-		pipeline.Status.Archived = boolPtr(false)
+		pipeline.Status.Archived = new(false)
 	}
 
 	if pipeline.Spec.Paused {
@@ -215,21 +177,21 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			log.Error(err, "pause pipeline")
 			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "PauseFailed", err.Error())
 			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
-				return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+				return true, ctrl.Result{}, fmt.Errorf("update status: %w", err2)
 			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		pipeline.Status.Paused = boolPtr(true)
+		pipeline.Status.Paused = new(true)
 	} else {
 		if _, err := concourseTeam.UnpausePipeline(pipelineRef); err != nil {
 			log.Error(err, "unpause pipeline")
 			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "UnpauseFailed", err.Error())
 			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
-				return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+				return true, ctrl.Result{}, fmt.Errorf("update status: %w", err2)
 			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		pipeline.Status.Paused = boolPtr(false)
+		pipeline.Status.Paused = new(false)
 	}
 
 	if pipeline.Spec.Exposed {
@@ -237,23 +199,30 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			log.Error(err, "expose pipeline")
 			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "ExposeFailed", err.Error())
 			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
-				return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+				return true, ctrl.Result{}, fmt.Errorf("update status: %w", err2)
 			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		pipeline.Status.Exposed = boolPtr(true)
+		pipeline.Status.Exposed = new(true)
 	} else {
 		if _, err := concourseTeam.HidePipeline(pipelineRef); err != nil {
 			log.Error(err, "hide pipeline")
 			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "HideFailed", err.Error())
 			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
-				return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+				return true, ctrl.Result{}, fmt.Errorf("update status: %w", err2)
 			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		pipeline.Status.Exposed = boolPtr(false)
+		pipeline.Status.Exposed = new(false)
 	}
 
+	return false, ctrl.Result{}, nil
+}
+
+// observePipeline reads the current pipeline, resource types, jobs, and
+// resources from Concourse and reflects them into the pipeline status. Errors
+// from the individual observation calls are tolerated (status is left as-is).
+func (r *PipelineReconciler) observePipeline(pipeline *concoursev1alpha1.Pipeline, cl concourseapi.Client, concourseTeam concourseapi.Team, teamName string, pipelineRef atc.PipelineRef) {
 	atcPipeline, found, err := concourseTeam.Pipeline(pipelineRef)
 	if err == nil && found {
 		pipeline.Status.PipelineID = int32Ptr(atcPipeline.ID)
@@ -262,9 +231,9 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			t := metav1.Unix(atcPipeline.LastUpdated, 0)
 			pipeline.Status.LastUpdated = &t
 		}
-		pipeline.Status.Paused = boolPtr(atcPipeline.Paused)
-		pipeline.Status.Exposed = boolPtr(atcPipeline.Public)
-		pipeline.Status.Archived = boolPtr(atcPipeline.Archived)
+		pipeline.Status.Paused = new(atcPipeline.Paused)
+		pipeline.Status.Exposed = new(atcPipeline.Public)
+		pipeline.Status.Archived = new(atcPipeline.Archived)
 		pipeline.Status.PausedBy = atcPipeline.PausedBy
 		if atcPipeline.PausedAt > 0 {
 			pat := metav1.Unix(atcPipeline.PausedAt, 0)
@@ -319,18 +288,96 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		pipeline.Status.Resources = observed
 	}
+}
 
-	pipeline.Status.ObservedGeneration = pipeline.Generation
-	setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionTrue, "Ready", "")
+// handlePipelineLifecycle processes suspend, deletion/finalizer removal, and
+// finalizer addition. It returns handled=true when the caller should return the
+// provided result immediately.
+func (r *PipelineReconciler) handlePipelineLifecycle(ctx context.Context, pipeline *concoursev1alpha1.Pipeline) (bool, error) {
+	log := logf.FromContext(ctx)
 
-	if pipeline.Status.ObservedGeneration != pipeline.Generation {
-		recordEventf(r.Recorder, pipeline, corev1.EventTypeNormal, "ConfigSynced", "Pipeline %q synchronized successfully", pipelineName)
+	if pipeline.Spec.Suspend {
+		log.Info("Reconciliation is suspended for Pipeline", "name", pipeline.Name)
+		setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
+		if err := r.Status().Update(ctx, pipeline); err != nil {
+			return true, fmt.Errorf("update status: %w", err)
+		}
+		return true, nil
 	}
 
-	if err := r.Status().Update(ctx, pipeline); err != nil {
-		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
+	if !pipeline.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(pipeline, pipelineFinalizer) {
+			if err := r.deletePipeline(ctx, pipeline); err != nil {
+				log.Error(err, "delete pipeline from Concourse")
+			}
+			controllerutil.RemoveFinalizer(pipeline, pipelineFinalizer)
+			if err := r.Update(ctx, pipeline); err != nil {
+				return true, fmt.Errorf("remove finalizer: %w", err)
+			}
+		}
+		return true, nil
 	}
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+
+	if !controllerutil.ContainsFinalizer(pipeline, pipelineFinalizer) {
+		controllerutil.AddFinalizer(pipeline, pipelineFinalizer)
+		if err := r.Update(ctx, pipeline); err != nil {
+			return true, fmt.Errorf("add finalizer: %w", err)
+		}
+	}
+
+	return false, nil
+}
+
+// syncPipelineConfig applies the rendered pipeline config to Concourse when the
+// config hash changed or the pipeline was never created. It returns
+// handled=true when the caller should return the provided result immediately.
+func (r *PipelineReconciler) syncPipelineConfig(ctx context.Context, pipeline *concoursev1alpha1.Pipeline, concourseTeam concourseapi.Team, pipelineRef atc.PipelineRef, yamlBytes []byte, newHash string) (bool, ctrl.Result) {
+	log := logf.FromContext(ctx)
+
+	if pipeline.Status.ConfigHash != newHash || pipeline.Status.PipelineID == nil {
+		// Optimistic-concurrency: Concourse set-config requires the CURRENT
+		// config version as a token (X-Concourse-Config-Version). Passing an
+		// empty token makes the ATC unable to reconcile and it rejects the
+		// save with "comparison with existing config failed during save".
+		// Fetch the current version first (empty for a brand-new pipeline),
+		// then set-config with it.
+		currentVersion := func() string {
+			if _, v, found, cfgErr := concourseTeam.PipelineConfig(pipelineRef); cfgErr == nil && found {
+				return v
+			}
+			return ""
+		}
+		_, _, warnings, err := concourseTeam.CreateOrUpdatePipelineConfig(pipelineRef, currentVersion(), yamlBytes, false)
+		// A version mismatch (another writer advanced the config between our
+		// fetch and write) surfaces as the comparison error. Re-fetch the
+		// version and retry ONCE; a persistent failure then surfaces as
+		// SetPipelineFailed rather than looping.
+		if err != nil && isConfigComparisonError(err) {
+			log.Info("pipeline set-config version raced; re-fetching config version and retrying", "pipeline", pipelineRef.String())
+			_, _, warnings, err = concourseTeam.CreateOrUpdatePipelineConfig(pipelineRef, currentVersion(), yamlBytes, false)
+		}
+		if err != nil {
+			recordEventf(r.Recorder, pipeline, corev1.EventTypeWarning, "SetPipelineFailed", "Failed to update pipeline config: %v", err)
+			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigSynced, metav1.ConditionFalse, "SetPipelineFailed", err.Error())
+			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "SetPipelineFailed", err.Error())
+			if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
+				log.Error(err2, "update status")
+			}
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}
+		}
+		if len(warnings) > 0 {
+			recordEventf(r.Recorder, pipeline, corev1.EventTypeWarning, "HasWarnings", "Pipeline config updated with %d warning(s)", len(warnings))
+			log.Info("pipeline config warnings", "warnings", warnings)
+			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionTrue, "HasWarnings",
+				fmt.Sprintf("%d warning(s): %s", len(warnings), warnings[0].Message))
+		} else {
+			setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigWarning, metav1.ConditionFalse, "NoWarnings", "")
+		}
+		setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionConfigSynced, metav1.ConditionTrue, "Synced", "")
+		pipeline.Status.ConfigHash = newHash
+	}
+
+	return false, ctrl.Result{}
 }
 
 func (r *PipelineReconciler) loadPipelineConfig(ctx context.Context, pipeline *concoursev1alpha1.Pipeline) ([]byte, error) {

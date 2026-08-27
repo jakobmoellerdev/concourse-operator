@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/concourse/concourse/atc"
+	concourseapi "github.com/concourse/concourse/go-concourse/concourse"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -62,17 +63,8 @@ func (r *JobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if job.Spec.Suspend {
-		log.Info("Reconciliation is suspended for Job", "name", job.Name)
-		setCondition(&job.Status.Conditions, job.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
-		if err := r.Status().Update(ctx, job); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !job.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
+	if handled, err := r.handleJobLifecycle(ctx, job); handled {
+		return ctrl.Result{}, err
 	}
 
 	cl, teamName, pipelineName, err := resolveClientForJob(ctx, r.Client, r.Cache, job)
@@ -123,28 +115,8 @@ func (r *JobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	concourseTeam := cl.Team(teamName)
 	pipelineRef := atc.PipelineRef{Name: pipelineName}
 
-	if job.Spec.Paused {
-		if _, err := concourseTeam.PauseJob(pipelineRef, jobName); err != nil {
-			log.Error(err, "pause job")
-			recordEventf(r.Recorder, job, corev1.EventTypeWarning, "PauseFailed", "Failed to pause job: %v", err)
-			setCondition(&job.Status.Conditions, job.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "PauseFailed", err.Error())
-			if err2 := r.Status().Update(ctx, job); err2 != nil {
-				return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
-		job.Status.Paused = boolPtr(true)
-	} else {
-		if _, err := concourseTeam.UnpauseJob(pipelineRef, jobName); err != nil {
-			log.Error(err, "unpause job")
-			recordEventf(r.Recorder, job, corev1.EventTypeWarning, "UnpauseFailed", "Failed to unpause job: %v", err)
-			setCondition(&job.Status.Conditions, job.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "UnpauseFailed", err.Error())
-			if err2 := r.Status().Update(ctx, job); err2 != nil {
-				return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
-		job.Status.Paused = boolPtr(false)
+	if handled, res, err := r.applyJobPause(ctx, job, concourseTeam, pipelineRef, jobName); handled {
+		return res, err
 	}
 
 	atcJob, found, err := concourseTeam.Job(pipelineRef, jobName)
@@ -169,9 +141,9 @@ func (r *JobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	job.Status.JobID = int32Ptr(atcJob.ID)
-	job.Status.HasNewInputs = boolPtr(atcJob.HasNewInputs)
+	job.Status.HasNewInputs = new(atcJob.HasNewInputs)
 	job.Status.Groups = atcJob.Groups
-	job.Status.DisableManualTrigger = boolPtr(atcJob.DisableManualTrigger)
+	job.Status.DisableManualTrigger = new(atcJob.DisableManualTrigger)
 	job.Status.PausedBy = atcJob.PausedBy
 	if atcJob.PausedAt > 0 {
 		pa := metav1.Unix(atcJob.PausedAt, 0)
@@ -209,7 +181,7 @@ func (r *JobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 	job.Status.Outputs = outputs
 
-	job.Status.Paused = boolPtr(atcJob.Paused)
+	job.Status.Paused = new(atcJob.Paused)
 
 	if atcJob.FinishedBuild != nil {
 		fb := atcJob.FinishedBuild
@@ -258,6 +230,60 @@ func mapPhaseToReason(phase string) string {
 	default:
 		return "Unknown"
 	}
+}
+
+// handleJobLifecycle processes suspend and deletion short-circuits. It returns
+// handled=true when the caller should return the provided result immediately.
+func (r *JobReconciler) handleJobLifecycle(ctx context.Context, job *concoursev1alpha1.Job) (bool, error) {
+	log := logf.FromContext(ctx)
+
+	if job.Spec.Suspend {
+		log.Info("Reconciliation is suspended for Job", "name", job.Name)
+		setCondition(&job.Status.Conditions, job.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
+		if err := r.Status().Update(ctx, job); err != nil {
+			return true, fmt.Errorf("update status: %w", err)
+		}
+		return true, nil
+	}
+
+	if !job.DeletionTimestamp.IsZero() {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// applyJobPause pauses or unpauses the job in Concourse according to spec.paused.
+// It returns handled=true when the caller should return the provided result
+// immediately.
+func (r *JobReconciler) applyJobPause(ctx context.Context, job *concoursev1alpha1.Job, concourseTeam concourseapi.Team, pipelineRef atc.PipelineRef, jobName string) (bool, ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if job.Spec.Paused {
+		if _, err := concourseTeam.PauseJob(pipelineRef, jobName); err != nil {
+			log.Error(err, "pause job")
+			recordEventf(r.Recorder, job, corev1.EventTypeWarning, "PauseFailed", "Failed to pause job: %v", err)
+			setCondition(&job.Status.Conditions, job.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "PauseFailed", err.Error())
+			if err2 := r.Status().Update(ctx, job); err2 != nil {
+				return true, ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+			}
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		job.Status.Paused = new(true)
+	} else {
+		if _, err := concourseTeam.UnpauseJob(pipelineRef, jobName); err != nil {
+			log.Error(err, "unpause job")
+			recordEventf(r.Recorder, job, corev1.EventTypeWarning, "UnpauseFailed", "Failed to unpause job: %v", err)
+			setCondition(&job.Status.Conditions, job.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "UnpauseFailed", err.Error())
+			if err2 := r.Status().Update(ctx, job); err2 != nil {
+				return true, ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+			}
+			return true, ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		job.Status.Paused = new(false)
+	}
+
+	return false, ctrl.Result{}, nil
 }
 
 func (r *JobReconciler) pruneBuilds(ctx context.Context, job *concoursev1alpha1.Job) error {

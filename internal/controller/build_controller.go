@@ -73,21 +73,8 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if build.Spec.Suspend {
-		log.Info("Reconciliation is suspended for Build", "name", build.Name)
-		setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
-		if err := r.Status().Update(ctx, build); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !build.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
-	}
-
-	if isTerminal(build.Status.ConcourseStatus) {
-		return ctrl.Result{}, nil
+	if handled, err := r.handleBuildLifecycle(ctx, build); handled {
+		return ctrl.Result{}, err
 	}
 
 	if build.Spec.JobRef == nil {
@@ -125,40 +112,8 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	jobName := concoursev1alpha1.ResolvedJobName(job)
 
 	// Adopt an existing build if spec.buildID is set; otherwise create once.
-	if build.Status.BuildID == nil {
-		if build.Spec.BuildID != nil {
-			build.Status.BuildID = build.Spec.BuildID
-			recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Adopted", "Adopted existing Concourse build %d", *build.Spec.BuildID)
-		} else {
-			atcBuild, err := cl.Team(teamName).CreateJobBuild(atc.PipelineRef{Name: pipelineName}, jobName)
-			if err != nil {
-				recordEventf(r.Recorder, build, corev1.EventTypeWarning, "TriggerFailed", "Failed to trigger Concourse build: %v", err)
-				setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "TriggerFailed", err.Error())
-				if err2 := r.Status().Update(ctx, build); err2 != nil {
-					log.Error(err2, "update status")
-				}
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-			}
-			build.Status.BuildID = int32Ptr(atcBuild.ID)
-			build.Status.BuildName = atcBuild.Name
-			build.Status.APIURL = atcBuild.APIURL
-			if atcBuild.StartTime > 0 {
-				t := metav1.Unix(atcBuild.StartTime, 0)
-				build.Status.StartTime = &t
-			}
-			recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Triggered", "Triggered Concourse build %s", atcBuild.Name)
-			// CRITICAL: persist the new BuildID to status IMMEDIATELY. If we defer
-			// this to the single Status().Update at the end of Reconcile and that
-			// update loses a conflict (the Build CR was modified concurrently, e.g.
-			// by kro re-applying it), the next reconcile would see BuildID==nil and
-			// trigger a SECOND ATC build — the duplicate-build bug. Retry on
-			// conflict by re-fetching and re-applying just the build tracking
-			// fields so the created build is never lost/duplicated.
-			if uErr := r.persistBuildTracking(ctx, build); uErr != nil {
-				log.Error(uErr, "persisting new build tracking; requeueing to avoid duplicate trigger")
-				return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
-			}
-		}
+	if handled, res := r.ensureBuildTriggered(ctx, build, cl, teamName, pipelineName, jobName); handled {
+		return res, nil
 	}
 
 	buildID := int(ptrValue(build.Status.BuildID))
@@ -172,86 +127,8 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	if buildID != 0 {
-		atcBuild, found, err := cl.Build(strconv.Itoa(buildID))
-		if err != nil {
-			log.Error(err, "get build status")
-		} else if !found && !isTerminal(build.Status.ConcourseStatus) {
-			// The ATC no longer has this build and it never reached a terminal
-			// state. This happens when the pipeline was deleted+recreated (e.g.
-			// the config-comparison self-heal) while a build was in flight: the
-			// ATC drops the build with the old pipeline's rows. Reset the build
-			// tracking so the create path above re-triggers a FRESH build against
-			// the recreated pipeline on the next reconcile, rather than being
-			// stuck pending forever pointing at a vanished build.
-			log.Info("tracked ATC build vanished before completing; re-triggering", "buildID", buildID)
-			recordEventf(r.Recorder, build, corev1.EventTypeWarning, "BuildVanished",
-				"Concourse build %d disappeared before completing (pipeline likely recreated); re-triggering", buildID)
-			build.Status.BuildID = nil
-			build.Status.BuildName = ""
-			build.Status.ConcourseStatus = ""
-			if err2 := r.Status().Update(ctx, build); err2 != nil {
-				log.Error(err2, "update status")
-			}
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		} else if found {
-			build.Status.ConcourseStatus = concoursev1alpha1.BuildPhase(atcBuild.Status)
-			if atcBuild.Name != "" {
-				build.Status.BuildName = atcBuild.Name
-			}
-			if atcBuild.APIURL != "" {
-				build.Status.APIURL = atcBuild.APIURL
-			}
-			if atcBuild.StartTime > 0 {
-				t := metav1.Unix(atcBuild.StartTime, 0)
-				build.Status.StartTime = &t
-			}
-			if atcBuild.EndTime > 0 {
-				t := metav1.Unix(atcBuild.EndTime, 0)
-				build.Status.EndTime = &t
-			}
-			if atcBuild.CreatedBy != nil {
-				build.Status.CreatedBy = *atcBuild.CreatedBy
-			}
-		}
-
-		// Fetch and map BuildIO
-		if bio, bfound, berr := cl.BuildResources(buildID); berr == nil && bfound {
-			inputs := make([]concoursev1alpha1.BuildIO, 0, len(bio.Inputs))
-			for _, inp := range bio.Inputs {
-				inputs = append(inputs, concoursev1alpha1.BuildIO{
-					Name:            inp.Name,
-					Version:         inp.Version,
-					FirstOccurrence: boolPtr(inp.FirstOccurrence),
-				})
-			}
-			build.Status.Inputs = inputs
-
-			outputs := make([]concoursev1alpha1.BuildIO, 0, len(bio.Outputs))
-			for _, out := range bio.Outputs {
-				outputs = append(outputs, concoursev1alpha1.BuildIO{
-					Name:    out.Name,
-					Version: out.Version,
-				})
-			}
-			build.Status.Outputs = outputs
-		}
-
-		// Compose WebURL
-		pipelineObj := &concoursev1alpha1.Pipeline{}
-		if err := r.Get(ctx, refKey(job.Namespace, job.Spec.PipelineRef), pipelineObj); err == nil {
-			teamObj := &concoursev1alpha1.Team{}
-			if err := r.Get(ctx, refKey(pipelineObj.Namespace, pipelineObj.Spec.TeamRef), teamObj); err == nil {
-				instanceObj := &concoursev1alpha1.Instance{}
-				if err := r.Get(ctx, refKey(teamObj.Namespace, teamObj.Spec.InstanceRef), instanceObj); err == nil {
-					base := instanceObj.Status.ExternalURL
-					if base == "" {
-						base = instanceObj.Spec.URL
-					}
-					if base != "" && build.Status.BuildName != "" {
-						build.Status.WebURL = fmt.Sprintf("%s/teams/%s/pipelines/%s/jobs/%s/builds/%s", strings.TrimSuffix(base, "/"), teamName, pipelineName, jobName, build.Status.BuildName)
-					}
-				}
-			}
+		if res, done := r.observeBuild(ctx, build, cl, buildID, job, teamName, pipelineName, jobName); done {
+			return res, nil
 		}
 	}
 
@@ -296,6 +173,52 @@ func (r *BuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
+// ensureBuildTriggered adopts an existing build when spec.buildID is set, or
+// triggers a new Concourse build exactly once and durably persists its tracking
+// fields. It returns handled=true when the caller should return the provided
+// result immediately.
+func (r *BuildReconciler) ensureBuildTriggered(ctx context.Context, build *concoursev1alpha1.Build, cl concourseapi.Client, teamName, pipelineName, jobName string) (bool, ctrl.Result) {
+	log := logf.FromContext(ctx)
+
+	if build.Status.BuildID == nil {
+		if build.Spec.BuildID != nil {
+			build.Status.BuildID = build.Spec.BuildID
+			recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Adopted", "Adopted existing Concourse build %d", *build.Spec.BuildID)
+		} else {
+			atcBuild, err := cl.Team(teamName).CreateJobBuild(atc.PipelineRef{Name: pipelineName}, jobName)
+			if err != nil {
+				recordEventf(r.Recorder, build, corev1.EventTypeWarning, "TriggerFailed", "Failed to trigger Concourse build: %v", err)
+				setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "TriggerFailed", err.Error())
+				if err2 := r.Status().Update(ctx, build); err2 != nil {
+					log.Error(err2, "update status")
+				}
+				return true, ctrl.Result{RequeueAfter: 30 * time.Second}
+			}
+			build.Status.BuildID = int32Ptr(atcBuild.ID)
+			build.Status.BuildName = atcBuild.Name
+			build.Status.APIURL = atcBuild.APIURL
+			if atcBuild.StartTime > 0 {
+				t := metav1.Unix(atcBuild.StartTime, 0)
+				build.Status.StartTime = &t
+			}
+			recordEventf(r.Recorder, build, corev1.EventTypeNormal, "Triggered", "Triggered Concourse build %s", atcBuild.Name)
+			// CRITICAL: persist the new BuildID to status IMMEDIATELY. If we defer
+			// this to the single Status().Update at the end of Reconcile and that
+			// update loses a conflict (the Build CR was modified concurrently, e.g.
+			// by kro re-applying it), the next reconcile would see BuildID==nil and
+			// trigger a SECOND ATC build — the duplicate-build bug. Retry on
+			// conflict by re-fetching and re-applying just the build tracking
+			// fields so the created build is never lost/duplicated.
+			if uErr := r.persistBuildTracking(ctx, build); uErr != nil {
+				log.Error(uErr, "persisting new build tracking; requeueing to avoid duplicate trigger")
+				return true, ctrl.Result{RequeueAfter: 2 * time.Second}
+			}
+		}
+	}
+
+	return false, ctrl.Result{}
+}
+
 func isTerminal(s concoursev1alpha1.BuildPhase) bool {
 	switch s {
 	case concoursev1alpha1.BuildPhaseSucceeded, concoursev1alpha1.BuildPhaseFailed,
@@ -303,6 +226,123 @@ func isTerminal(s concoursev1alpha1.BuildPhase) bool {
 		return true
 	}
 	return false
+}
+
+// handleBuildLifecycle processes suspend, deletion, and terminal short-circuit.
+// It returns handled=true when the caller should return the provided result
+// immediately.
+func (r *BuildReconciler) handleBuildLifecycle(ctx context.Context, build *concoursev1alpha1.Build) (bool, error) {
+	log := logf.FromContext(ctx)
+
+	if build.Spec.Suspend {
+		log.Info("Reconciliation is suspended for Build", "name", build.Name)
+		setCondition(&build.Status.Conditions, build.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
+		if err := r.Status().Update(ctx, build); err != nil {
+			return true, fmt.Errorf("update status: %w", err)
+		}
+		return true, nil
+	}
+
+	if !build.DeletionTimestamp.IsZero() {
+		return true, nil
+	}
+
+	if isTerminal(build.Status.ConcourseStatus) {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// observeBuild fetches the current ATC build status, maps build IO, and composes
+// the WebURL for a build that already has a tracked buildID. It returns
+// done=true when the caller should return the provided result immediately.
+func (r *BuildReconciler) observeBuild(ctx context.Context, build *concoursev1alpha1.Build, cl concourseapi.Client, buildID int, job *concoursev1alpha1.Job, teamName, pipelineName, jobName string) (ctrl.Result, bool) {
+	log := logf.FromContext(ctx)
+
+	atcBuild, found, err := cl.Build(strconv.Itoa(buildID))
+	if err != nil {
+		log.Error(err, "get build status")
+	} else if !found && !isTerminal(build.Status.ConcourseStatus) {
+		// The ATC no longer has this build and it never reached a terminal
+		// state. This happens when the pipeline was deleted+recreated (e.g.
+		// the config-comparison self-heal) while a build was in flight: the
+		// ATC drops the build with the old pipeline's rows. Reset the build
+		// tracking so the create path above re-triggers a FRESH build against
+		// the recreated pipeline on the next reconcile, rather than being
+		// stuck pending forever pointing at a vanished build.
+		log.Info("tracked ATC build vanished before completing; re-triggering", "buildID", buildID)
+		recordEventf(r.Recorder, build, corev1.EventTypeWarning, "BuildVanished",
+			"Concourse build %d disappeared before completing (pipeline likely recreated); re-triggering", buildID)
+		build.Status.BuildID = nil
+		build.Status.BuildName = ""
+		build.Status.ConcourseStatus = ""
+		if err2 := r.Status().Update(ctx, build); err2 != nil {
+			log.Error(err2, "update status")
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, true
+	} else if found {
+		build.Status.ConcourseStatus = concoursev1alpha1.BuildPhase(atcBuild.Status)
+		if atcBuild.Name != "" {
+			build.Status.BuildName = atcBuild.Name
+		}
+		if atcBuild.APIURL != "" {
+			build.Status.APIURL = atcBuild.APIURL
+		}
+		if atcBuild.StartTime > 0 {
+			t := metav1.Unix(atcBuild.StartTime, 0)
+			build.Status.StartTime = &t
+		}
+		if atcBuild.EndTime > 0 {
+			t := metav1.Unix(atcBuild.EndTime, 0)
+			build.Status.EndTime = &t
+		}
+		if atcBuild.CreatedBy != nil {
+			build.Status.CreatedBy = *atcBuild.CreatedBy
+		}
+	}
+
+	// Fetch and map BuildIO
+	if bio, bfound, berr := cl.BuildResources(buildID); berr == nil && bfound {
+		inputs := make([]concoursev1alpha1.BuildIO, 0, len(bio.Inputs))
+		for _, inp := range bio.Inputs {
+			inputs = append(inputs, concoursev1alpha1.BuildIO{
+				Name:            inp.Name,
+				Version:         inp.Version,
+				FirstOccurrence: new(inp.FirstOccurrence),
+			})
+		}
+		build.Status.Inputs = inputs
+
+		outputs := make([]concoursev1alpha1.BuildIO, 0, len(bio.Outputs))
+		for _, out := range bio.Outputs {
+			outputs = append(outputs, concoursev1alpha1.BuildIO{
+				Name:    out.Name,
+				Version: out.Version,
+			})
+		}
+		build.Status.Outputs = outputs
+	}
+
+	// Compose WebURL
+	pipelineObj := &concoursev1alpha1.Pipeline{}
+	if err := r.Get(ctx, refKey(job.Namespace, job.Spec.PipelineRef), pipelineObj); err == nil {
+		teamObj := &concoursev1alpha1.Team{}
+		if err := r.Get(ctx, refKey(pipelineObj.Namespace, pipelineObj.Spec.TeamRef), teamObj); err == nil {
+			instanceObj := &concoursev1alpha1.Instance{}
+			if err := r.Get(ctx, refKey(teamObj.Namespace, teamObj.Spec.InstanceRef), instanceObj); err == nil {
+				base := instanceObj.Status.ExternalURL
+				if base == "" {
+					base = instanceObj.Spec.URL
+				}
+				if base != "" && build.Status.BuildName != "" {
+					build.Status.WebURL = fmt.Sprintf("%s/teams/%s/pipelines/%s/jobs/%s/builds/%s", strings.TrimSuffix(base, "/"), teamName, pipelineName, jobName, build.Status.BuildName)
+				}
+			}
+		}
+	}
+
+	return ctrl.Result{}, false
 }
 
 // watchBuildEvents opens an SSE stream for buildID and sends a GenericEvent

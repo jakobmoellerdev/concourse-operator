@@ -110,8 +110,8 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: exactly one of inline or configMapRef must be set
-                  rule: (has(self.inline) && self.inline != '' && !has(self.configMapRef))
-                    || ((!has(self.inline) || self.inline == '') && has(self.configMapRef))
+                  rule: (has(self.inline) && size(self.inline) > 0 && !has(self.configMapRef))
+                    || ((!has(self.inline) || size(self.inline) == 0) && has(self.configMapRef))
               exposed:
                 description: Exposed makes the pipeline publicly visible without authentication.
                 type: boolean
@@ -190,8 +190,8 @@ spec:
                   type: object
                   x-kubernetes-validations:
                   - message: exactly one of value or valueFrom must be set
-                    rule: (has(self.value) && self.value != '' && !has(self.valueFrom))
-                      || ((!has(self.value) || self.value == '') && has(self.valueFrom))
+                    rule: (has(self.value) && size(self.value) > 0 && !has(self.valueFrom))
+                      || ((!has(self.value) || size(self.value) == 0) && has(self.valueFrom))
                 type: array
             required:
             - config

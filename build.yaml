@@ -1,7 +1,0 @@
-apiVersion: concourse-ci.org/v1alpha1
-kind: Build
-metadata:
-  name: hello-1
-spec:
-  jobRef:
-    name: hello

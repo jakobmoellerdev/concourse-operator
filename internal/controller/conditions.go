@@ -41,10 +41,6 @@ func int32Ptr(v int) *int32 {
 	return &i
 }
 
-func boolPtr(v bool) *bool {
-	return &v
-}
-
 func ptrValue[T any](p *T) T {
 	var zero T
 	if p == nil {
@@ -59,7 +55,7 @@ func recordEvent(recorder record.EventRecorder, object runtime.Object, eventtype
 	}
 }
 
-func recordEventf(recorder record.EventRecorder, object runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
+func recordEventf(recorder record.EventRecorder, object runtime.Object, eventtype, reason, messageFmt string, args ...any) {
 	if recorder != nil {
 		recorder.Eventf(object, eventtype, reason, messageFmt, args...)
 	}

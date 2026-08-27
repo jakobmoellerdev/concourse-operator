@@ -196,7 +196,7 @@ func (r *ResourceReconciler) syncPin(ctx context.Context, team goconcourse.Team,
 			}
 			recordEventf(r.Recorder, resource, corev1.EventTypeNormal, "Unpinned", "Resource %q unpinned in Concourse", resourceName)
 		}
-		resource.Status.Pinned = boolPtr(false)
+		resource.Status.Pinned = new(false)
 		resource.Status.PinnedVersionID = nil
 		return nil
 	}
@@ -208,7 +208,7 @@ func (r *ResourceReconciler) syncPin(ctx context.Context, team goconcourse.Team,
 	}
 
 	if reflect.DeepEqual(desired, actual) && atcRes.PinnedVersion != nil {
-		resource.Status.Pinned = boolPtr(true)
+		resource.Status.Pinned = new(true)
 		return nil
 	}
 
@@ -233,7 +233,7 @@ func (r *ResourceReconciler) syncPin(ctx context.Context, team goconcourse.Team,
 		return fmt.Errorf("pin resource version: %w", err)
 	}
 	recordEventf(r.Recorder, resource, corev1.EventTypeNormal, "Pinned", "Resource %q pinned to version %v", resourceName, desired)
-	resource.Status.Pinned = boolPtr(true)
+	resource.Status.Pinned = new(true)
 	resource.Status.PinnedVersionID = int32Ptr(match.ID)
 	return nil
 }

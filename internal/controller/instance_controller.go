@@ -59,31 +59,8 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if instance.Spec.Suspend {
-		log.Info("Reconciliation is suspended for Instance", "name", instance.Name)
-		setCondition(&instance.Status.Conditions, instance.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
-		if err := r.Status().Update(ctx, instance); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !instance.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(instance, instanceFinalizer) {
-			r.Cache.Evict(instance)
-			controllerutil.RemoveFinalizer(instance, instanceFinalizer)
-			if err := r.Update(ctx, instance); err != nil {
-				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
-			}
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !controllerutil.ContainsFinalizer(instance, instanceFinalizer) {
-		controllerutil.AddFinalizer(instance, instanceFinalizer)
-		if err := r.Update(ctx, instance); err != nil {
-			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
-		}
+	if handled, err := r.handleInstanceLifecycle(ctx, instance); handled {
+		return ctrl.Result{}, err
 	}
 
 	if instance.Spec.Auth.Password == nil && instance.Spec.Auth.Token == nil {
@@ -144,7 +121,7 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Fetch extra observable data
 	if uinfo, uerr := cl.UserInfo(); uerr == nil {
 		instance.Status.AuthenticatedUser = uinfo.UserName
-		instance.Status.AuthenticatedAdmin = boolPtr(uinfo.IsAdmin)
+		instance.Status.AuthenticatedAdmin = new(uinfo.IsAdmin)
 	}
 	if wall, werr := cl.GetWall(); werr == nil && wall.Message != "" {
 		instance.Status.WallMessage = wall.Message
@@ -207,6 +184,42 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{RequeueAfter: instanceInterval(instance)}, nil
+}
+
+// handleInstanceLifecycle processes suspend, deletion/finalizer removal, and
+// finalizer addition. It returns handled=true when the caller should return the
+// provided result immediately.
+func (r *InstanceReconciler) handleInstanceLifecycle(ctx context.Context, instance *concoursev1alpha1.Instance) (bool, error) {
+	log := logf.FromContext(ctx)
+
+	if instance.Spec.Suspend {
+		log.Info("Reconciliation is suspended for Instance", "name", instance.Name)
+		setCondition(&instance.Status.Conditions, instance.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "Suspended", "Reconciliation is suspended")
+		if err := r.Status().Update(ctx, instance); err != nil {
+			return true, fmt.Errorf("update status: %w", err)
+		}
+		return true, nil
+	}
+
+	if !instance.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(instance, instanceFinalizer) {
+			r.Cache.Evict(instance)
+			controllerutil.RemoveFinalizer(instance, instanceFinalizer)
+			if err := r.Update(ctx, instance); err != nil {
+				return true, fmt.Errorf("remove finalizer: %w", err)
+			}
+		}
+		return true, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(instance, instanceFinalizer) {
+		controllerutil.AddFinalizer(instance, instanceFinalizer)
+		if err := r.Update(ctx, instance); err != nil {
+			return true, fmt.Errorf("add finalizer: %w", err)
+		}
+	}
+
+	return false, nil
 }
 
 func instanceInterval(instance *concoursev1alpha1.Instance) time.Duration {
