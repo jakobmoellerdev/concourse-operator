@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/concourse/concourse/atc"
@@ -276,6 +277,223 @@ var _ = Describe("Resource Controller", func() {
 			Expect(*fetched.Status.Pinned).To(BeTrue())
 			Expect(fetched.Status.PinnedVersionID).NotTo(BeNil())
 			Expect(*fetched.Status.PinnedVersionID).To(Equal(int32(9)))
+		})
+
+		It("should disable a resource version listed in spec.disabledVersions", func() {
+			cache := concourse.NewCache()
+			disableCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "res4-team",
+					resourceFn: func(_ atc.PipelineRef, name string) (atc.Resource, bool, error) {
+						return atc.Resource{Name: name}, true, nil
+					},
+					resourceVersionsFn: func(_ atc.PipelineRef, _ string, _ goconcourse.Page, _ atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error) {
+						return []atc.ResourceVersion{{ID: 42, Version: atc.Version{"ref": "bad"}, Enabled: false}}, goconcourse.Pagination{}, true, nil
+					},
+					disableResourceVersionFn: func(_ atc.PipelineRef, _ string, id int) (bool, error) {
+						disableCalled = true
+						Expect(id).To(Equal(42))
+						return true, nil
+					},
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "res4-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "res4-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "res4-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			cr := &concoursev1alpha1.Resource{
+				ObjectMeta: metav1.ObjectMeta{Name: "res-disable", Namespace: "default"},
+				Spec: concoursev1alpha1.ResourceSpec{
+					PipelineRef:      concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					ResourceName:     "my-git",
+					DisabledVersions: []map[string]string{{"ref": "bad"}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			reconciler := &ResourceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Cache: cache}
+			nsn := types.NamespacedName{Name: "res-disable", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(disableCalled).To(BeTrue())
+
+			fetched := &concoursev1alpha1.Resource{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.DisabledVersionIDs).To(Equal([]int32{42}))
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should re-enable a version dropped from spec.disabledVersions", func() {
+			cache := concourse.NewCache()
+			enableCalled := false
+			disableCalled := false
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "res5-team",
+					resourceFn: func(_ atc.PipelineRef, name string) (atc.Resource, bool, error) {
+						return atc.Resource{Name: name}, true, nil
+					},
+					resourceVersionsFn: func(_ atc.PipelineRef, _ string, _ goconcourse.Page, _ atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error) {
+						return []atc.ResourceVersion{{ID: 7, Version: atc.Version{"ref": "bad"}}}, goconcourse.Pagination{}, true, nil
+					},
+					disableResourceVersionFn: func(_ atc.PipelineRef, _ string, _ int) (bool, error) {
+						disableCalled = true
+						return true, nil
+					},
+					enableResourceVersionFn: func(_ atc.PipelineRef, _ string, id int) (bool, error) {
+						enableCalled = true
+						Expect(id).To(Equal(99))
+						return true, nil
+					},
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "res5-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "res5-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "res5-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			cr := &concoursev1alpha1.Resource{
+				ObjectMeta: metav1.ObjectMeta{Name: "res-reenable", Namespace: "default"},
+				Spec: concoursev1alpha1.ResourceSpec{
+					PipelineRef:  concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					ResourceName: "my-git",
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			// Simulate a previously-tracked disabled version (ID 99) that is no
+			// longer present in the spec: it must be re-enabled.
+			cr.Status.DisabledVersionIDs = []int32{99}
+			Expect(k8sClient.Status().Update(ctx, cr)).To(Succeed())
+
+			reconciler := &ResourceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Cache: cache}
+			nsn := types.NamespacedName{Name: "res-reenable", Namespace: "default"}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(enableCalled).To(BeTrue())
+			Expect(disableCalled).To(BeFalse())
+
+			fetched := &concoursev1alpha1.Resource{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.DisabledVersionIDs).To(BeEmpty())
+		})
+
+		It("should be idempotent when the desired version is already disabled", func() {
+			cache := concourse.NewCache()
+			disableCallCount := 0
+			enableCallCount := 0
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "res6-team",
+					resourceFn: func(_ atc.PipelineRef, name string) (atc.Resource, bool, error) {
+						return atc.Resource{Name: name}, true, nil
+					},
+					resourceVersionsFn: func(_ atc.PipelineRef, _ string, _ goconcourse.Page, _ atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error) {
+						return []atc.ResourceVersion{{ID: 55, Version: atc.Version{"ref": "bad"}}}, goconcourse.Pagination{}, true, nil
+					},
+					disableResourceVersionFn: func(_ atc.PipelineRef, _ string, _ int) (bool, error) {
+						disableCallCount++
+						return true, nil
+					},
+					enableResourceVersionFn: func(_ atc.PipelineRef, _ string, _ int) (bool, error) {
+						enableCallCount++
+						return true, nil
+					},
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "res6-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "res6-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "res6-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			cr := &concoursev1alpha1.Resource{
+				ObjectMeta: metav1.ObjectMeta{Name: "res-idempotent", Namespace: "default"},
+				Spec: concoursev1alpha1.ResourceSpec{
+					PipelineRef:      concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					ResourceName:     "my-git",
+					DisabledVersions: []map[string]string{{"ref": "bad"}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			reconciler := &ResourceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Cache: cache}
+			nsn := types.NamespacedName{Name: "res-idempotent", Namespace: "default"}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(disableCallCount).To(Equal(1))
+
+			// Reconcile again with the same spec: the version is already tracked
+			// as disabled, so DisableResourceVersion must not be called again.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(disableCallCount).To(Equal(1))
+			Expect(enableCallCount).To(Equal(0))
+
+			fetched := &concoursev1alpha1.Resource{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.DisabledVersionIDs).To(Equal([]int32{55}))
+		})
+
+		It("should set Ready=False with reason DisableVersionFailed on error", func() {
+			cache := concourse.NewCache()
+			fake := &fakeClient{
+				team: &fakeTeam{
+					name: "res7-team",
+					resourceFn: func(_ atc.PipelineRef, name string) (atc.Resource, bool, error) {
+						return atc.Resource{Name: name}, true, nil
+					},
+					resourceVersionsFn: func(_ atc.PipelineRef, _ string, _ goconcourse.Page, _ atc.Version) ([]atc.ResourceVersion, goconcourse.Pagination, bool, error) {
+						return []atc.ResourceVersion{{ID: 3, Version: atc.Version{"ref": "bad"}}}, goconcourse.Pagination{}, true, nil
+					},
+					disableResourceVersionFn: func(_ atc.PipelineRef, _ string, _ int) (bool, error) {
+						return false, fmt.Errorf("concourse unavailable")
+					},
+				},
+			}
+			inst := makeReadyInstanceWithFakeClient(ctx, "res7-inst", cache, fake)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, inst) })
+			team := makeReadyTeam(ctx, "res7-team", inst.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, team) })
+			pipeline := makeReadyPipeline(ctx, "res7-pipeline", team.Name)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pipeline) })
+
+			cr := &concoursev1alpha1.Resource{
+				ObjectMeta: metav1.ObjectMeta{Name: "res-disable-error", Namespace: "default"},
+				Spec: concoursev1alpha1.ResourceSpec{
+					PipelineRef:      concoursev1alpha1.LocalObjectReference{Name: pipeline.Name},
+					ResourceName:     "my-git",
+					DisabledVersions: []map[string]string{{"ref": "bad"}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cr) })
+
+			reconciler := &ResourceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Cache: cache}
+			nsn := types.NamespacedName{Name: "res-disable-error", Namespace: "default"}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			fetched := &concoursev1alpha1.Resource{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			cond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("DisableVersionFailed"))
 		})
 	})
 })

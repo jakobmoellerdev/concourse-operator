@@ -48,6 +48,8 @@ type fakeTeam struct {
 	resourceFn                     func(atc.PipelineRef, string) (atc.Resource, bool, error)
 	pinResourceVersionFn           func(atc.PipelineRef, string, int) (bool, error)
 	unpinResourceFn                func(atc.PipelineRef, string) (bool, error)
+	disableResourceVersionFn       func(atc.PipelineRef, string, int) (bool, error)
+	enableResourceVersionFn        func(atc.PipelineRef, string, int) (bool, error)
 }
 
 func (t *fakeTeam) Name() string       { return t.name }
@@ -243,12 +245,18 @@ func (t *fakeTeam) CheckPrototype(_ atc.PipelineRef, _ string, _ atc.Version, _ 
 	return atc.Build{}, false, nil
 }
 
-func (t *fakeTeam) DisableResourceVersion(_ atc.PipelineRef, _ string, _ int) (bool, error) {
-	return false, nil
+func (t *fakeTeam) DisableResourceVersion(ref atc.PipelineRef, name string, id int) (bool, error) {
+	if t.disableResourceVersionFn != nil {
+		return t.disableResourceVersionFn(ref, name, id)
+	}
+	return true, nil
 }
 
-func (t *fakeTeam) EnableResourceVersion(_ atc.PipelineRef, _ string, _ int) (bool, error) {
-	return false, nil
+func (t *fakeTeam) EnableResourceVersion(ref atc.PipelineRef, name string, id int) (bool, error) {
+	if t.enableResourceVersionFn != nil {
+		return t.enableResourceVersionFn(ref, name, id)
+	}
+	return true, nil
 }
 
 func (t *fakeTeam) ClearResourceCache(_ atc.PipelineRef, _ string, _ atc.Version) (int64, error) {

@@ -54,6 +54,14 @@ type ResourceSpec struct {
 	// +kubebuilder:validation:MaxLength=512
 	PinComment string `json:"pinComment,omitempty"`
 
+	// DisabledVersions lists resource versions (as version maps, same shape as
+	// PinnedVersion) that must be disabled in Concourse so they can't be used
+	// as build inputs. The controller resolves each version map to a version ID
+	// and calls DisableResourceVersion. Any version previously disabled by the
+	// operator but no longer listed here is re-enabled.
+	// +optional
+	DisabledVersions []map[string]string `json:"disabledVersions,omitempty"`
+
 	// Suspend stops all reconciliation activity on this Resource.
 	// Existing Concourse state is left untouched.
 	// +optional
@@ -92,6 +100,12 @@ type ResourceStatus struct {
 	// Pinned indicates whether the resource is currently pinned in Concourse.
 	// +optional
 	Pinned *bool `json:"pinned,omitempty"`
+
+	// DisabledVersionIDs are the Concourse resource version IDs currently
+	// disabled by the operator, tracked so versions dropped from
+	// spec.disabledVersions can be re-enabled.
+	// +optional
+	DisabledVersionIDs []int32 `json:"disabledVersionIDs,omitempty"`
 
 	// ObservedGeneration is the last generation that was reconciled.
 	// +optional

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -136,6 +137,16 @@ func (r *ResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	if err := r.syncDisabledVersions(concourseTeam, pipelineRef, resourceName, resource); err != nil {
+		log.Error(err, "sync disabled versions")
+		recordEventf(r.Recorder, resource, corev1.EventTypeWarning, "DisableVersionFailed", "Failed to sync disabled versions: %v", err)
+		setCondition(&resource.Status.Conditions, resource.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "DisableVersionFailed", err.Error())
+		if err2 := r.Status().Update(ctx, resource); err2 != nil {
+			return ctrl.Result{}, fmt.Errorf("update status: %w", err2)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	if shouldCheck(resource) {
 		var version atc.Version
 		if len(resource.Spec.PinnedVersion) > 0 {
@@ -236,6 +247,81 @@ func (r *ResourceReconciler) syncPin(ctx context.Context, team goconcourse.Team,
 	resource.Status.Pinned = new(true)
 	resource.Status.PinnedVersionID = int32Ptr(match.ID)
 	return nil
+}
+
+// syncDisabledVersions reconciles resource.Spec.DisabledVersions against Concourse.
+// It resolves each desired version map to a version ID, disables versions that are
+// desired but not yet tracked, and re-enables tracked versions that are no longer
+// desired. It is idempotent: safe to call repeatedly with the same spec.
+func (r *ResourceReconciler) syncDisabledVersions(team goconcourse.Team, ref atc.PipelineRef, resourceName string, resource *concoursev1alpha1.Resource) error {
+	desired := resource.Spec.DisabledVersions
+	tracked := resource.Status.DisabledVersionIDs
+
+	// Resolve each desired version map to its Concourse version ID.
+	desiredIDs := make(map[int32]map[string]string, len(desired))
+	for _, v := range desired {
+		if len(v) == 0 {
+			continue
+		}
+		versions, _, found, err := team.ResourceVersions(ref, resourceName, goconcourse.Page{Limit: 50}, atc.Version(v))
+		if err != nil {
+			return fmt.Errorf("list resource versions: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("resource %q not found when listing versions", resourceName)
+		}
+		var match *atc.ResourceVersion
+		for i := range versions {
+			if reflect.DeepEqual(map[string]string(versions[i].Version), v) {
+				match = &versions[i]
+				break
+			}
+		}
+		if match == nil {
+			return fmt.Errorf("disabled version %v not found for resource %q", v, resourceName)
+		}
+		desiredIDs[int32PtrVal(match.ID)] = v
+	}
+
+	trackedSet := make(map[int32]struct{}, len(tracked))
+	for _, id := range tracked {
+		trackedSet[id] = struct{}{}
+	}
+
+	// Disable desired versions that are not yet tracked.
+	for id, v := range desiredIDs {
+		if _, ok := trackedSet[id]; ok {
+			continue
+		}
+		if _, err := team.DisableResourceVersion(ref, resourceName, int(id)); err != nil {
+			return fmt.Errorf("disable resource version: %w", err)
+		}
+		recordEventf(r.Recorder, resource, corev1.EventTypeNormal, "VersionDisabled", "Resource %q version %v disabled", resourceName, v)
+	}
+
+	// Re-enable tracked versions that are no longer desired.
+	for _, id := range tracked {
+		if _, ok := desiredIDs[id]; ok {
+			continue
+		}
+		if _, err := team.EnableResourceVersion(ref, resourceName, int(id)); err != nil {
+			return fmt.Errorf("enable resource version: %w", err)
+		}
+		recordEventf(r.Recorder, resource, corev1.EventTypeNormal, "VersionEnabled", "Resource %q version ID %d re-enabled", resourceName, id)
+	}
+
+	newTracked := make([]int32, 0, len(desiredIDs))
+	for id := range desiredIDs {
+		newTracked = append(newTracked, id)
+	}
+	slices.Sort(newTracked)
+	resource.Status.DisabledVersionIDs = newTracked
+
+	return nil
+}
+
+func int32PtrVal(v int) int32 {
+	return int32(v) //nolint:gosec
 }
 
 func shouldCheck(resource *concoursev1alpha1.Resource) bool {
