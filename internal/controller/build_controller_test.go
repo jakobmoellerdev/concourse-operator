@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/concourse/concourse/atc"
+	concourseapi "github.com/concourse/concourse/go-concourse/concourse"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -494,20 +495,16 @@ var _ = Describe("Build Controller", func() {
 			Expect(fetched.Status.RerunOf).To(Equal("42"))
 		})
 
-		It("should set a comment once via SetJobBuildComment and not re-set it when unchanged", func() {
+		It("should set a comment once and not re-set it when unchanged", func() {
 			cache := concourse.NewCache()
 			commentCalls := 0
 			var lastComment string
+			var lastBuildID int
 			fake := &fakeClient{
 				team: &fakeTeam{
 					name: "bc6-team",
 					createJobBuildFn: func(_ atc.PipelineRef, _ string) (atc.Build, error) {
 						return atc.Build{ID: 505, Name: "6"}, nil
-					},
-					setJobBuildCommentFn: func(_ atc.PipelineRef, _ string, _ string, comment string) (bool, error) {
-						commentCalls++
-						lastComment = comment
-						return true, nil
 					},
 				},
 				buildFn:       func(_ string) (atc.Build, bool, error) { return atc.Build{ID: 505, Status: "pending"}, true, nil },
@@ -546,39 +543,42 @@ var _ = Describe("Build Controller", func() {
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 				Cache:  cache,
+				setBuildComment: func(_ context.Context, _ concourseapi.Client, buildID int, comment string) error {
+					commentCalls++
+					lastComment = comment
+					lastBuildID = buildID
+					return nil
+				},
 			}
 			nsn := types.NamespacedName{Name: "build-comment", Namespace: "default"}
 
-			// First reconcile: build gets triggered but has no BuildName yet from
-			// ensureBuildTriggered until observeBuild populates it; comment is set
-			// once BuildName is known.
+			// First reconcile: build gets triggered and observeBuild populates the
+			// build ID; comment is set once against that build ID.
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(commentCalls).To(Equal(1), "expected SetJobBuildComment to be called exactly once")
+			Expect(commentCalls).To(Equal(1), "expected the comment to be set exactly once")
 			Expect(lastComment).To(Equal("first comment"))
+			Expect(lastBuildID).To(Equal(505))
 
 			fetched := &concoursev1alpha1.Build{}
 			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
 			Expect(fetched.Status.Comment).To(Equal("first comment"))
 
-			// Second reconcile with the same spec.comment: SetJobBuildComment must
-			// not be called again.
+			// Second reconcile with the same spec.comment: the comment must not be
+			// set again.
 			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(commentCalls).To(Equal(1), "comment should not be re-set when unchanged")
 		})
 
-		It("should surface SetJobBuildComment failure as a Warning event and Ready=False without discarding the build", func() {
+		It("should surface a comment failure as a Warning event and Ready=False without discarding the build", func() {
 			cache := concourse.NewCache()
 			fake := &fakeClient{
 				team: &fakeTeam{
 					name: "bc7-team",
 					createJobBuildFn: func(_ atc.PipelineRef, _ string) (atc.Build, error) {
 						return atc.Build{ID: 606, Name: "7"}, nil
-					},
-					setJobBuildCommentFn: func(_ atc.PipelineRef, _ string, _ string, _ string) (bool, error) {
-						return false, fmt.Errorf("comment rejected")
 					},
 				},
 				buildFn:       func(_ string) (atc.Build, bool, error) { return atc.Build{ID: 606, Status: "pending"}, true, nil },
@@ -617,6 +617,9 @@ var _ = Describe("Build Controller", func() {
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 				Cache:  cache,
+				setBuildComment: func(_ context.Context, _ concourseapi.Client, _ int, _ string) error {
+					return fmt.Errorf("comment rejected")
+				},
 			}
 			nsn := types.NamespacedName{Name: "build-comment-err", Namespace: "default"}
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})

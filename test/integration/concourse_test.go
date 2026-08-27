@@ -19,7 +19,11 @@ limitations under the License.
 package integration_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/concourse/concourse/atc"
 	goconcourse "github.com/concourse/concourse/go-concourse/concourse"
@@ -308,6 +312,15 @@ jobs:
 			Expect(err).NotTo(HaveOccurred())
 			Expect(build.Name).NotTo(BeEmpty())
 
+			// A build can only be rerun once its inputs have been resolved; the
+			// ATC returns 500 (InputsReady() == false) if we rerun a freshly
+			// created, not-yet-scheduled build. Wait for the scheduler to assign
+			// inputs to the build before rerunning it.
+			Eventually(func() error {
+				_, err := team.RerunJobBuild(pipelineRef, testJobName, build.Name)
+				return err
+			}, "90s", "3s").Should(Succeed())
+
 			rerun, err := team.RerunJobBuild(pipelineRef, testJobName, build.Name)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rerun.ID).NotTo(BeZero())
@@ -322,20 +335,39 @@ jobs:
 
 			build, err := team.CreateJobBuild(pipelineRef, testJobName)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(build.Name).NotTo(BeEmpty())
+			Expect(build.ID).NotTo(BeZero())
 
-			ok, err := team.SetJobBuildComment(pipelineRef, testJobName, build.Name, "first comment")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ok).To(BeTrue())
+			// Build comments are set against /api/v1/builds/:build_id/comment.
+			// go-concourse's Team.SetJobBuildComment targets that route but only
+			// supplies name-based params, so it fails with "missing param
+			// :build_id"; exercise the working build-id route directly, matching
+			// what the Build controller does.
+			setComment := func(comment string) error {
+				body, merr := json.Marshal(atc.SetBuildCommentBody{Comment: comment})
+				Expect(merr).NotTo(HaveOccurred())
+				url := fmt.Sprintf("%s/api/v1/builds/%d/comment", strings.TrimSuffix(concourseClient.URL(), "/"), build.ID)
+				req, rerr := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+				Expect(rerr).NotTo(HaveOccurred())
+				req.Header.Set("Content-Type", "application/json")
+				resp, derr := concourseClient.HTTPClient().Do(req)
+				if derr != nil {
+					return derr
+				}
+				defer func() { _ = resp.Body.Close() }()
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					return fmt.Errorf("unexpected status %s", resp.Status)
+				}
+				return nil
+			}
+
+			Expect(setComment("first comment")).To(Succeed())
 
 			fetchedBuild, found, err := concourseClient.Build(fmt.Sprintf("%d", build.ID))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(found).To(BeTrue())
 			Expect(fetchedBuild.Comment).To(Equal("first comment"))
 
-			ok, err = team.SetJobBuildComment(pipelineRef, testJobName, build.Name, "updated comment")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ok).To(BeTrue())
+			Expect(setComment("updated comment")).To(Succeed())
 
 			fetchedBuild, found, err = concourseClient.Build(fmt.Sprintf("%d", build.ID))
 			Expect(err).NotTo(HaveOccurred())
