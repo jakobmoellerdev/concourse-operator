@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 
 	concoursev1alpha1 "github.com/jakobmoellerdev/concourse-operator/api/v1alpha1"
 	"github.com/jakobmoellerdev/concourse-operator/internal/concourse"
@@ -111,7 +112,7 @@ func (r *PipelineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	yamlBytes, err := r.loadPipelineConfig(ctx, pipeline)
+	yamlBytes, err := r.loadPipelineConfig(ctx, pipeline, teamObj)
 	if err != nil {
 		setCondition(&pipeline.Status.Conditions, pipeline.Generation, concoursev1alpha1.ConditionReady, metav1.ConditionFalse, "ConfigLoadFailed", err.Error())
 		if err2 := r.Status().Update(ctx, pipeline); err2 != nil {
@@ -380,12 +381,12 @@ func (r *PipelineReconciler) syncPipelineConfig(ctx context.Context, pipeline *c
 	return false, ctrl.Result{}
 }
 
-func (r *PipelineReconciler) loadPipelineConfig(ctx context.Context, pipeline *concoursev1alpha1.Pipeline) ([]byte, error) {
+func (r *PipelineReconciler) loadPipelineConfig(ctx context.Context, pipeline *concoursev1alpha1.Pipeline, team *concoursev1alpha1.Team) ([]byte, error) {
 	cfg := pipeline.Spec.Config
+	var raw []byte
 	if cfg.Inline != "" {
-		return []byte(cfg.Inline), nil
-	}
-	if cfg.ConfigMapRef != nil {
+		raw = []byte(cfg.Inline)
+	} else if cfg.ConfigMapRef != nil {
 		cm := &corev1.ConfigMap{}
 		key := client.ObjectKey{Namespace: pipeline.Namespace, Name: cfg.ConfigMapRef.Name}
 		if err := r.Get(ctx, key, cm); err != nil {
@@ -395,9 +396,110 @@ func (r *PipelineReconciler) loadPipelineConfig(ctx context.Context, pipeline *c
 		if !ok {
 			return nil, fmt.Errorf("key %q not found in configmap %s", cfg.ConfigMapRef.Key, cfg.ConfigMapRef.Name)
 		}
-		return []byte(val), nil
+		raw = []byte(val)
+	} else {
+		return nil, fmt.Errorf("pipeline config must specify either inline or configMapRef")
 	}
-	return nil, fmt.Errorf("pipeline config must specify either inline or configMapRef")
+
+	if len(pipeline.Spec.K8sConfigs) == 0 {
+		return raw, nil
+	}
+
+	return r.injectK8sConfigs(ctx, pipeline, team, raw)
+}
+
+const defaultK8sConfigResourceRepo = "ghcr.io/jakobmoellerdev/concourse-k8s-config-resource"
+const k8sConfigResourceTypeName = "k8s-config"
+
+func (r *PipelineReconciler) resolveK8sConfigImage(ctx context.Context, pipeline *concoursev1alpha1.Pipeline, team *concoursev1alpha1.Team) concoursev1alpha1.ContainerImageSpec {
+	if pipeline.Spec.K8sConfigImage != nil && pipeline.Spec.K8sConfigImage.Repository != "" {
+		return *pipeline.Spec.K8sConfigImage
+	}
+
+	if team != nil {
+		instance := &concoursev1alpha1.Instance{}
+		if err := r.Get(ctx, refKey(team.Namespace, team.Spec.InstanceRef), instance); err == nil {
+			if instance.Spec.Defaults != nil && instance.Spec.Defaults.K8sConfigImage != nil && instance.Spec.Defaults.K8sConfigImage.Repository != "" {
+				return *instance.Spec.Defaults.K8sConfigImage
+			}
+		}
+	}
+
+	return concoursev1alpha1.ContainerImageSpec{
+		Repository: defaultK8sConfigResourceRepo,
+		Tag:        "latest",
+	}
+}
+
+func (r *PipelineReconciler) injectK8sConfigs(ctx context.Context, pipeline *concoursev1alpha1.Pipeline, team *concoursev1alpha1.Team, raw []byte) ([]byte, error) {
+	var atcConfig atc.Config
+	if err := atc.UnmarshalConfig(raw, &atcConfig); err != nil {
+		return nil, fmt.Errorf("unmarshal pipeline config for k8sConfigs injection: %w", err)
+	}
+
+	imgSpec := r.resolveK8sConfigImage(ctx, pipeline, team)
+	tag := imgSpec.Tag
+	if tag == "" {
+		tag = "latest"
+	}
+
+	// 1. Ensure k8s-config resource_type is present
+	hasResourceType := false
+	for _, rt := range atcConfig.ResourceTypes {
+		if rt.Name == k8sConfigResourceTypeName {
+			hasResourceType = true
+			break
+		}
+	}
+	if !hasResourceType {
+		atcConfig.ResourceTypes = append(atcConfig.ResourceTypes, atc.ResourceType{
+			Name: k8sConfigResourceTypeName,
+			Type: "registry-image",
+			Source: atc.Source{
+				"repository": imgSpec.Repository,
+				"tag":        tag,
+			},
+		})
+	}
+
+	// 2. Inject resources for each k8sConfig
+	for _, k8sCfg := range pipeline.Spec.K8sConfigs {
+		hasResource := false
+		for _, res := range atcConfig.Resources {
+			if res.Name == k8sCfg.Name {
+				hasResource = true
+				break
+			}
+		}
+		if hasResource {
+			continue
+		}
+
+		kind := "ConfigMap"
+		targetName := ""
+		targetNamespace := pipeline.Namespace
+		if k8sCfg.ConfigMapRef != nil {
+			kind = "ConfigMap"
+			targetName = k8sCfg.ConfigMapRef.Name
+			targetNamespace = k8sCfg.ConfigMapRef.ResolveNamespace(pipeline.Namespace)
+		} else if k8sCfg.SecretRef != nil {
+			kind = "Secret"
+			targetName = k8sCfg.SecretRef.Name
+			targetNamespace = k8sCfg.SecretRef.ResolveNamespace(pipeline.Namespace)
+		}
+
+		atcConfig.Resources = append(atcConfig.Resources, atc.ResourceConfig{
+			Name: k8sCfg.Name,
+			Type: k8sConfigResourceTypeName,
+			Source: atc.Source{
+				"kind":      kind,
+				"name":      targetName,
+				"namespace": targetNamespace,
+			},
+		})
+	}
+
+	return yaml.Marshal(atcConfig)
 }
 
 // isConfigComparisonError reports whether an error from set-config is the

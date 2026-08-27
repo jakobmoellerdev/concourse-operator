@@ -108,6 +108,17 @@ type InstanceSpec struct {
 	// +kubebuilder:default="main"
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
 	DefaultTeam string `json:"defaultTeam,omitempty"`
+
+	// Defaults provides fallback settings for pipelines managed under this instance.
+	// +optional
+	Defaults *InstanceDefaults `json:"defaults,omitempty"`
+}
+
+// InstanceDefaults configures default settings inherited by pipelines under this instance.
+type InstanceDefaults struct {
+	// K8sConfigImage sets the default image used for auto-injected Kubernetes config resources.
+	// +optional
+	K8sConfigImage *ContainerImageSpec `json:"k8sConfigImage,omitempty"`
 }
 
 // InstanceStatus defines the observed state of Instance.
