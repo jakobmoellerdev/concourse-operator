@@ -58,6 +58,20 @@ type InstanceAuth struct {
 	Token *TokenAuth `json:"token,omitempty"`
 }
 
+// WallConfig declares a cluster-wide banner message ('wall') to display
+// across the Concourse UI, with an optional expiry.
+type WallConfig struct {
+	// Message is the banner text shown across the Concourse UI.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Message string `json:"message"`
+	// TTL is how long the banner remains active before Concourse expires it
+	// server-side. When unset, the banner does not expire on its own.
+	// +optional
+	TTL *metav1.Duration `json:"ttl,omitempty"`
+}
+
 // TLSConfig configures TLS for the Concourse connection.
 // +kubebuilder:validation:XValidation:rule="!(has(self.caRef) && self.insecureSkipVerify)",message="caRef and insecureSkipVerify are mutually exclusive"
 type TLSConfig struct {
@@ -108,6 +122,12 @@ type InstanceSpec struct {
 	// +kubebuilder:default="main"
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
 	DefaultTeam string `json:"defaultTeam,omitempty"`
+
+	// Wall configures a cluster-wide banner message. When set, the operator
+	// reconciles it via SetWall; when cleared (nil), the operator clears any
+	// wall it previously set.
+	// +optional
+	Wall *WallConfig `json:"wall,omitempty"`
 }
 
 // InstanceStatus defines the observed state of Instance.
@@ -221,6 +241,7 @@ const (
 // +kubebuilder:printcolumn:name="WebURL",type=string,JSONPath=`.status.webURL`,priority=1
 // +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.status.clusterName`,priority=1
 // +kubebuilder:printcolumn:name="Suspended",type=boolean,JSONPath=`.spec.suspend`,priority=1
+// +kubebuilder:printcolumn:name="Wall",type=string,JSONPath=`.status.wallMessage`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Instance represents a connection to a Concourse CI server.

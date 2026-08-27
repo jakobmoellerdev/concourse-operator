@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/concourse/concourse/atc"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -302,6 +304,194 @@ var _ = Describe("Instance Controller", func() {
 			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(2 * time.Minute))
+		})
+	})
+
+	Context("When reconciling the wall banner", func() {
+		ctx := context.Background()
+
+		// setupWallInstance creates a fresh Instance, runs the first reconcile to
+		// attach the finalizer, then seeds the cache with the given fake client
+		// so the second reconcile exercises syncWall against it.
+		setupWallInstance := func(name string, spec concoursev1alpha1.InstanceSpec, fake *fakeClient) (types.NamespacedName, *InstanceReconciler, *concourse.Cache) {
+			inst := &concoursev1alpha1.Instance{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+				Spec:       spec,
+			}
+			Expect(k8sClient.Create(ctx, inst)).To(Succeed())
+			nsn := types.NamespacedName{Name: name, Namespace: "default"}
+			DeferCleanup(func() {
+				latest := &concoursev1alpha1.Instance{}
+				if err := k8sClient.Get(ctx, nsn, latest); err == nil {
+					controllerutil.RemoveFinalizer(latest, instanceFinalizer)
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			cache := concourse.NewCache()
+			reconciler := &InstanceReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Cache:  cache,
+			}
+
+			By("First reconcile adds finalizer (cache miss expected)")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Re-fetch to get post-finalizer ResourceVersion, then seed cache")
+			afterFinalizer := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, afterFinalizer)).To(Succeed())
+			cache.Set(afterFinalizer, fake)
+
+			return nsn, reconciler, cache
+		}
+
+		It("should call SetWall and record WallMessage when spec.Wall is set", func() {
+			var setWallCalls int
+			var lastWall atc.Wall
+			fake := &fakeClient{
+				team:          &fakeTeam{name: "main"},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{Version: "7.11.0"}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+				setWallFn: func(w atc.Wall) error {
+					setWallCalls++
+					lastWall = w
+					return nil
+				},
+			}
+
+			spec := testInstanceSpec()
+			ttl := metav1.Duration{Duration: 10 * time.Minute}
+			spec.Wall = &concoursev1alpha1.WallConfig{Message: "scheduled maintenance", TTL: &ttl}
+
+			nsn, reconciler, _ := setupWallInstance("instance-wall-set", spec, fake)
+
+			By("Second reconcile hits cache and sets the wall")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(setWallCalls).To(Equal(1))
+			Expect(lastWall.Message).To(Equal("scheduled maintenance"))
+			Expect(lastWall.TTL).To(Equal(10 * time.Minute))
+
+			fetched := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.WallMessage).To(Equal("scheduled maintenance"))
+
+			readyCond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should not call SetWall again when the desired message is unchanged", func() {
+			var setWallCalls int
+			fake := &fakeClient{
+				team:          &fakeTeam{name: "main"},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{Version: "7.11.0"}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+				setWallFn: func(_ atc.Wall) error {
+					setWallCalls++
+					return nil
+				},
+			}
+
+			spec := testInstanceSpec()
+			spec.Wall = &concoursev1alpha1.WallConfig{Message: "steady state"}
+
+			nsn, reconciler, _ := setupWallInstance("instance-wall-idempotent", spec, fake)
+
+			By("Second reconcile sets the wall the first time")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(setWallCalls).To(Equal(1))
+
+			By("Third reconcile with the same spec message does not call SetWall again")
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(setWallCalls).To(Equal(1))
+
+			fetched := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.WallMessage).To(Equal("steady state"))
+		})
+
+		It("should call ClearWall and reset WallMessage when spec.Wall is removed", func() {
+			var clearWallCalls int
+			fake := &fakeClient{
+				team:          &fakeTeam{name: "main"},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{Version: "7.11.0"}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+				clearWallFn: func() error {
+					clearWallCalls++
+					return nil
+				},
+			}
+
+			spec := testInstanceSpec()
+			spec.Wall = &concoursev1alpha1.WallConfig{Message: "will be cleared"}
+
+			nsn, reconciler, cache := setupWallInstance("instance-wall-clear", spec, fake)
+
+			By("Second reconcile sets the wall")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Removing spec.Wall")
+			latest := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, latest)).To(Succeed())
+			latest.Spec.Wall = nil
+			Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+
+			By("Re-fetch to get post-update ResourceVersion, then re-seed cache")
+			afterUpdate := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, afterUpdate)).To(Succeed())
+			cache.Set(afterUpdate, fake)
+
+			By("Reconciling clears the wall")
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(clearWallCalls).To(Equal(1))
+
+			fetched := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.WallMessage).To(BeEmpty())
+		})
+
+		It("should set Ready=False and record a Warning event when SetWall fails", func() {
+			fake := &fakeClient{
+				team:          &fakeTeam{name: "main"},
+				getInfoFn:     func() (atc.Info, error) { return atc.Info{Version: "7.11.0"}, nil },
+				listWorkersFn: func() ([]atc.Worker, error) { return nil, nil },
+				setWallFn: func(_ atc.Wall) error {
+					return fmt.Errorf("wall endpoint unavailable")
+				},
+			}
+
+			spec := testInstanceSpec()
+			spec.Wall = &concoursev1alpha1.WallConfig{Message: "failing wall"}
+
+			nsn, reconciler, _ := setupWallInstance("instance-wall-fail", spec, fake)
+
+			recorder := record.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
+
+			By("Reconciling fails to set the wall and requeues")
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+
+			fetched := &concoursev1alpha1.Instance{}
+			Expect(k8sClient.Get(ctx, nsn, fetched)).To(Succeed())
+			Expect(fetched.Status.WallMessage).To(BeEmpty())
+
+			readyCond := meta.FindStatusCondition(fetched.Status.Conditions, concoursev1alpha1.ConditionReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal("WallFailed"))
+
+			Expect(recorder.Events).To(Receive(ContainSubstring("WallFailed")))
 		})
 	})
 })
